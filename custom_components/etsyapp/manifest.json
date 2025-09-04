@@ -1,11 +1,10 @@
 {
     "domain": "etsyapp",
-    "name": "Etsy Shop",
+    "name": "Etsy Shop Integration",
     "codeowners": ["@jmdevita"],
     "config_flow": true,
     "dependencies": ["application_credentials"],
     "documentation": "https://github.com/jmdevita/etsy-shop-integration",
-    "homeassistant": "2025.8.3",
     "integration_type": "service",
     "iot_class": "cloud_polling",
     "issue_tracker": "https://github.com/jmdevita/etsy-shop-integration/issues",

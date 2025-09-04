@@ -1,9 +1,8 @@
 {
     "name": "Etsy Shop Integration",
     "content_in_root": false,
-    "domains": ["sensor", "device_automation"],
     "homeassistant": "2025.8.3",
-    "iot_class": "cloud_polling",
     "render_readme": true,
-    "zip_release": true
+    "zip_release": true,
+    "hide_default_branch": true
 }
