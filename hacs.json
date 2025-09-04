@@ -1,6 +1,7 @@
 {
     "name": "Etsy Shop Integration",
     "content_in_root": false,
+    "filename": "etsyapp.zip",
     "homeassistant": "2025.8.3",
     "render_readme": true,
     "zip_release": true,
