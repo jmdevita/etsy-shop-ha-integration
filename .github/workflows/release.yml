@@ -4,6 +4,9 @@ on:
   release:
     types: [created, published]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Create Release Asset
