@@ -1,0 +1,25 @@
+# Etsy Shop Services
+
+refresh_data:
+  name: Refresh Shop Data
+  description: Manually refresh all Etsy shop data from the API
+  fields: {}
+
+get_shop_stats:
+  name: Get Shop Statistics
+  description: Retrieve current shop statistics with optional listings and transactions
+  fields:
+    include_listings:
+      name: Include Listings
+      description: Include recent listings in the response
+      default: true
+      required: false
+      selector:
+        boolean:
+    include_transactions:
+      name: Include Transactions
+      description: Include recent transactions in the response
+      default: true
+      required: false
+      selector:
+        boolean:

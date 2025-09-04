@@ -1,0 +1,82 @@
+{
+  "shop": {
+    "shop_id": 56636211,
+    "shop_name": "TestEtsyShop",
+    "title": "Handmade Crafts & Accessories",
+    "announcement": "Welcome to our shop! Check out our latest items.",
+    "currency_code": "USD",
+    "creation_timestamp": 1234567890,
+    "sale_message": "Thanks for your purchase!",
+    "digital_sale_message": "Download your files below.",
+    "review_average": 4.8,
+    "review_count": 125,
+    "transaction_sold_count": 1500,
+    "listing_active_count": 2,
+    "is_vacation": false,
+    "vacation_message": "",
+    "url": "https://www.etsy.com/shop/TestEtsyShop"
+  },
+  "listings": [
+    {
+      "listing_id": 123456789,
+      "title": "Handmade Leather Wallet",
+      "state": "active",
+      "price": {
+        "amount": 2500,
+        "divisor": 100,
+        "currency_code": "USD"
+      },
+      "quantity": 5,
+      "views": 250,
+      "num_favorers": 12,
+      "currency_code": "USD"
+    },
+    {
+      "listing_id": 987654321,
+      "title": "Custom Wood Sign",
+      "state": "active", 
+      "price": {
+        "amount": 4500,
+        "divisor": 100,
+        "currency_code": "USD"
+      },
+      "quantity": 3,
+      "views": 180,
+      "num_favorers": 8,
+      "currency_code": "USD"
+    }
+  ],
+  "transactions": [
+    {
+      "transaction_id": 111111111,
+      "title": "Handmade Leather Wallet",
+      "listing_id": 123456789,
+      "buyer_user_id": 22222222,
+      "quantity": 1,
+      "price": {
+        "amount": 2500,
+        "divisor": 100,
+        "currency_code": "USD"
+      },
+      "created_timestamp": 1693843200,
+      "updated_timestamp": 1693843200
+    },
+    {
+      "transaction_id": 333333333,
+      "title": "Custom Wood Sign",
+      "listing_id": 987654321,
+      "buyer_user_id": 44444444,
+      "quantity": 1,
+      "price": {
+        "amount": 4500,
+        "divisor": 100,
+        "currency_code": "USD"
+      },
+      "created_timestamp": 1693756800,
+      "updated_timestamp": 1693756800
+    }
+  ],
+  "listings_count": 2,
+  "transactions_count": 2,
+  "last_updated": "2023-09-04 10:00:00.000000"
+}

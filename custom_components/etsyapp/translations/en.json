@@ -1,0 +1,128 @@
+{
+    "config": {
+        "step": {
+            "connection_mode": {
+                "title": "Choose Connection Method",
+                "description": "Select how you want to connect to Etsy",
+                "data": {
+                    "connection_mode": "Connection Method"
+                }
+            },
+            "proxy_config": {
+                "title": "Configure Proxy Service",
+                "description": "Enter the connection details for your secure Etsy proxy service",
+                "data": {
+                    "proxy_url": "Proxy Service URL",
+                    "proxy_api_key": "API Key",
+                    "hmac_secret": "HMAC Secret"
+                },
+                "data_description": {
+                    "proxy_url": "The URL of your proxy service (e.g., http://localhost:8000)",
+                    "proxy_api_key": "Your unique API key from the proxy service",
+                    "hmac_secret": "Shared secret for secure HMAC authentication"
+                }
+            },
+            "pick_implementation": {
+                "title": "Connect to Etsy",
+                "description": "This integration uses OAuth2 to securely connect to your Etsy account. Click continue to authenticate with Etsy."
+            },
+            "shop_selection": {
+                "title": "Select Your Etsy Shop", 
+                "description": "Choose which Etsy shop to monitor. Found {num_shops} shop(s) for your account.",
+                "data": {
+                    "shop_id": "Shop"
+                }
+            },
+            "proxy_shop_selection": {
+                "title": "Select Your Etsy Shop",
+                "description": "Choose which Etsy shop to monitor. Found {num_shops} shop(s) connected to the proxy.",
+                "data": {
+                    "shop_id": "Shop"
+                }
+            },
+            "direct_credentials": {
+                "title": "Enter Etsy API Credentials",
+                "description": "Enter your Etsy App credentials from the Etsy Developer Dashboard. You'll need your App Keystring and Shared Secret.",
+                "data": {
+                    "client_id": "App Keystring",
+                    "client_secret": "Shared Secret"
+                }
+            },
+            "reauth": {
+                "title": "Re-enter Etsy API Credentials",
+                "description": "Your Etsy credentials are missing or incomplete. Please re-enter them from your Etsy Developer Dashboard.",
+                "data": {
+                    "client_id": "App Keystring",
+                    "client_secret": "Shared Secret"
+                }
+            },
+            "reconfigure": {
+                "title": "Reconfigure Etsy API Credentials",
+                "description": "Update your Etsy API credentials for {shop_name}. You'll need your App Keystring and Shared Secret from the Etsy Developer Dashboard.",
+                "data": {
+                    "client_id": "App Keystring",
+                    "client_secret": "Shared Secret"
+                }
+            }
+        },
+        "error": {
+            "shop_access_denied": "Unable to access the selected shop",
+            "no_shops_found": "No shops found for your Etsy account",
+            "oauth_failed": "OAuth authentication failed",
+            "invalid_auth": "Invalid authentication",
+            "invalid_proxy": "Failed to connect to proxy service. Please check URL and API key."
+        },
+        "abort": {
+            "already_configured": "Account is already configured",
+            "no_shops_found": "No shops found for your Etsy account",
+            "oauth_error": "Authentication failed",
+            "cannot_connect": "Failed to connect",
+            "invalid_client": "Invalid OAuth client configuration",
+            "proxy_not_ready": "The proxy service is currently in development and will be available in a future update. Please use Direct API mode for now.",
+            "reauth_successful": "Re-authentication successful! Your credentials have been updated.",
+            "reconfigure_successful": "Reconfiguration successful! Your credentials have been updated."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Etsy Shop Options",
+                "description": "Configure display settings for your Etsy shop data",
+                "data": {
+                    "listings_display_limit": "Number of listings to display",
+                    "transactions_display_limit": "Number of recent orders to display",
+                    "stock_threshold": "Low stock alert threshold"
+                },
+                "data_description": {
+                    "listings_display_limit": "How many listings to show in sensor attributes (1-25)",
+                    "transactions_display_limit": "How many recent orders to show in sensor attributes (1-25)",
+                    "stock_threshold": "Alert when stock falls below this number (1-20)"
+                }
+            }
+        }
+    },
+    "services": {
+        "refresh_data": {
+            "name": "Refresh Shop Data",
+            "description": "Manually refresh Etsy shop data from the API",
+            "fields": {}
+        },
+        "get_shop_stats": {
+            "name": "Get Shop Statistics",
+            "description": "Retrieve current shop statistics and metrics",
+            "fields": {
+                "include_listings": {
+                    "name": "Include Listings",
+                    "description": "Whether to include detailed listing information"
+                },
+                "include_transactions": {
+                    "name": "Include Transactions",
+                    "description": "Whether to include recent transaction details"
+                }
+            }
+        }
+    },
+    "application_credentials": {
+        "description": "Follow the instructions at [Etsy Developers](https://developers.etsy.com/documentation/getting_started) to create an OAuth application. Use `{redirect_uri}` as the redirect URI."
+    }
+}
