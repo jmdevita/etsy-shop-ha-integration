@@ -171,7 +171,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🆘 Support
 
-- **Issues**: [Report bugs or request features](https://github.com/your-username/etsy_unofficial/issues)
+- **Issues**: [Report bugs or request features](https://github.com/jmdevita/etsy-shop-ha-integration/issues)
 
 ## 🙏 Acknowledgments
 
