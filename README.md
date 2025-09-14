@@ -1,6 +1,7 @@
 # Etsy Shop Home Assistant Integration
 
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.8.3%2B-blue.svg)](https://www.home-assistant.io/)
+[![GH-downloads](https://img.shields.io/github/downloads/jmdevita/etsy-shop-ha-integration/total)](https://github.com/jmdevita/etsy-shop-ha-integration/releases)
 [![HACS Compatible](https://img.shields.io/badge/HACS-Compatible-green.svg)](https://hacs.xyz)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
