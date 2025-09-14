@@ -49,6 +49,9 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
         self._retry_count = 0
         self._max_retries = 5
         self._base_delay = 1  # Start with 1 second
+        # Cache last successful data to prevent unavailability during token refresh
+        self._last_successful_data = None
+        self._consecutive_failures = 0
         
         # Determine connection mode
         self.connection_mode = entry.data.get(CONF_CONNECTION_MODE, CONNECTION_MODE_DIRECT)
@@ -77,7 +80,14 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             name=DOMAIN,
             config_entry=entry,
             update_interval=timedelta(seconds=UPDATE_INTERVAL_SECONDS),
-            always_update=True,
+            always_update=False,  # Changed to False per HA best practices for performance
+        )
+        
+        _LOGGER.info(
+            "Initialized Etsy coordinator for shop %s with %s mode, update interval: %s seconds",
+            self.shop_id,
+            self.connection_mode,
+            UPDATE_INTERVAL_SECONDS
         )
     
     async def _get_oauth_implementation(self):
@@ -104,10 +114,41 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                 await self._check_for_changes(data)
                 # Reset retry count on successful fetch
                 self._retry_count = 0
+                # Store successful data for use during temporary failures
+                self._last_successful_data = data
+                self._consecutive_failures = 0
+                _LOGGER.debug("Successfully fetched data for shop %s", self.shop_id)
             
             return data
+        except ConfigEntryAuthFailed:
+            # Authentication failures need to trigger reauth flow
+            _LOGGER.error("Authentication failed, triggering reauth flow")
+            raise
         except Exception as err:
-            _LOGGER.error("Failed to update data after retries: %s", err)
+            self._consecutive_failures += 1
+            error_str = str(err).lower()
+            
+            # Check if this is a temporary failure that shouldn't cause unavailability
+            is_temporary = (
+                "rate limit" in error_str or 
+                "429" in error_str or
+                "token" in error_str or
+                "refresh" in error_str or
+                "timeout" in error_str or
+                "connection" in error_str
+            )
+            
+            if is_temporary and self._last_successful_data:
+                # Return cached data for temporary failures to prevent unavailability
+                _LOGGER.warning(
+                    "Temporary failure (attempt %s): %s. Using cached data to maintain availability.",
+                    self._consecutive_failures,
+                    err
+                )
+                return self._last_successful_data
+            
+            # For persistent failures or no cached data, raise the error
+            _LOGGER.error("Failed to update data: %s", err)
             raise UpdateFailed(f"Failed to update data: {err}") from err
     
     async def _fetch_with_retry(self, fetch_func):
@@ -131,7 +172,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                         jitter = random.uniform(0, delay * 0.1)
                         actual_delay = delay + jitter
                         
-                        _LOGGER.warning(
+                        _LOGGER.info(
                             "Rate limit hit, retrying in %.2f seconds (attempt %s/%s)",
                             actual_delay,
                             self._retry_count,
@@ -187,7 +228,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             listings_data = await self._fetch_listings_proxy()
             transactions_data = await self._fetch_transactions_proxy()
             
-            return {
+            proxy_data = {
                 "shop": shop_info,  # Changed from "shop_info" to "shop" to match sensor expectations
                 "listings": listings_data.get("results", []),
                 "listings_count": listings_data.get("count", 0),  # Changed from "active_listings_count" to "listings_count"
@@ -195,6 +236,11 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                 "transactions_count": len(transactions_data.get("results", [])),  # Added for consistency
                 "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),  # Match format with direct mode
             }
+            
+            # Cache successful data for use during temporary failures
+            self._last_successful_data = proxy_data
+            
+            return proxy_data
         except Exception as e:
             _LOGGER.error("Error fetching data via proxy: %s", e)
             raise UpdateFailed(f"Failed to fetch data via proxy: {e}")
@@ -298,14 +344,19 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             try:
                 await self.oauth_session.async_ensure_token_valid()
                 token = self.oauth_session.token["access_token"]
-                _LOGGER.debug("Using token from OAuth session (auto-refresh enabled)")
+                _LOGGER.debug("Token is valid, proceeding with API calls")
             except Exception as err:
-                _LOGGER.error("OAuth token refresh failed: %s", err)
+                _LOGGER.info("OAuth session token needs refresh: %s", err)
                 # Try manual refresh as fallback
                 token = await self._manual_token_refresh()
                 if not token:
+                    # Only raise auth error if we don't have cached data
+                    if self._last_successful_data:
+                        _LOGGER.warning("Token refresh failed, returning cached data to maintain availability")
+                        return self._last_successful_data
                     raise ConfigEntryAuthFailed("Token refresh failed. Please re-authenticate.") from err
                 token_refreshed = True
+                _LOGGER.info("Token refreshed successfully via manual refresh")
         else:
             # No OAuth session, try manual refresh if token expired
             token_data = self.config_entry.data.get("token", {})
@@ -314,13 +365,22 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             
             # Check if token is expired (with 60 second buffer)
             if expires_at and time.time() > (expires_at - 60):
-                _LOGGER.info("Token expired, attempting manual refresh")
+                _LOGGER.info(
+                    "Token expiring soon (expires: %s, current: %s), refreshing...",
+                    datetime.fromtimestamp(expires_at).strftime("%H:%M:%S"),
+                    datetime.now().strftime("%H:%M:%S")
+                )
                 refreshed_token = await self._manual_token_refresh()
                 if refreshed_token:
                     token = refreshed_token
                     token_refreshed = True
+                    _LOGGER.info("Token refreshed successfully")
                 else:
-                    # Trigger re-authentication flow
+                    # Use cached data if available instead of going unavailable
+                    if self._last_successful_data:
+                        _LOGGER.warning("Token refresh failed, using cached data to maintain availability")
+                        return self._last_successful_data
+                    # Only trigger reauth if we have no cached data
                     self.config_entry.async_start_reauth(self._hass)
                     raise ConfigEntryAuthFailed("Token expired and refresh failed. Please re-authenticate.")
             
@@ -408,8 +468,14 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                 "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
             }
             
+            # Cache successful data for use during token refresh
+            self._last_successful_data = combined_data
+            
             return combined_data
             
+        except ConfigEntryAuthFailed:
+            # Re-raise authentication failures without wrapping
+            raise
         except Exception as err:
             raise UpdateFailed(f"Error fetching data from Etsy API: {err}") from err
     
@@ -465,7 +531,10 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                     data=new_data
                 )
                 
-                _LOGGER.info("Successfully refreshed OAuth token manually")
+                _LOGGER.info(
+                    "Successfully refreshed OAuth token (expires: %s)",
+                    datetime.fromtimestamp(time.time() + new_token_data.get("expires_in", 3600)).strftime("%H:%M:%S")
+                )
                 return new_token_data["access_token"]
                 
         except Exception as err:
