@@ -91,9 +91,11 @@ class EtsyShopInfo(SensorEntity):
             if shop.get("creation_timestamp"):
                 try:
                     # Convert Unix timestamp to readable date
-                    creation_date = datetime.fromtimestamp(shop["creation_timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
-                except (ValueError, TypeError):
-                    creation_date = shop.get("creation_timestamp")
+                    timestamp = int(shop["creation_timestamp"])
+                    creation_date = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+                except (ValueError, TypeError, OSError) as e:
+                    _LOGGER.debug("Failed to convert creation_timestamp %s: %s", shop.get("creation_timestamp"), e)
+                    creation_date = str(shop.get("creation_timestamp"))
             
             self._hass_custom_attributes = {
                 "shop_id": str(shop.get("shop_id", "")),  # Keep as string without formatting
