@@ -171,10 +171,10 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
         """Handle connection mode selection."""
         if user_input is not None:
             self.connection_mode = user_input[CONF_CONNECTION_MODE]
-            
+
             if self.connection_mode == CONNECTION_MODE_PROXY:
-                # Proxy service is not ready yet
-                return self.async_abort(reason="proxy_not_ready")
+                # Proceed to proxy configuration
+                return await self.async_step_proxy_config()
             else:
                 return await self.async_step_direct_credentials()
         
@@ -183,12 +183,12 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
             data_schema=vol.Schema({
                 vol.Required(CONF_CONNECTION_MODE, default=CONNECTION_MODE_DIRECT): vol.In({
                     CONNECTION_MODE_DIRECT: "Direct Etsy API (requires dev account)",
-                    CONNECTION_MODE_PROXY: "Proxy Service (Coming Soon - In Development)"
+                    CONNECTION_MODE_PROXY: "Proxy Service (Beta)"
                 })
             }),
             description_placeholders={
                 "direct_desc": "Connect directly to Etsy API using your developer credentials",
-                "proxy_desc": "Proxy service is currently in development and will be available in a future update"
+                "proxy_desc": "Use the proxy service to connect without an Etsy developer account (Beta)"
             }
         )
     

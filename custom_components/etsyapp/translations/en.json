@@ -78,7 +78,7 @@
             "oauth_error": "Authentication failed",
             "cannot_connect": "Failed to connect",
             "invalid_client": "Invalid OAuth client configuration",
-            "proxy_not_ready": "The proxy service is currently in development and will be available in a future update. Please use Direct API mode for now.",
+            "proxy_not_ready": "The proxy service is in beta. If you encounter issues, please report them.",
             "reauth_successful": "Re-authentication successful! Your credentials have been updated.",
             "reconfigure_successful": "Reconfiguration successful! Your credentials have been updated."
         }

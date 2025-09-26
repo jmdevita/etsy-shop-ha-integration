@@ -74,22 +74,27 @@ Best for users with Etsy developer accounts who want direct API access.
    - You'll be redirected to Etsy to authorize the app
    - Select which shop to monitor (if you have multiple)
 
-### Proxy Service Connection (Coming Soon!)
+### Proxy Service Connection (Beta)
 
-**Status: In Development - Expected Q1 2025**
+**Status: Now Available in Beta**
 
-I'm building a proxy service that will eliminate the need for an Etsy developer account!
+No Etsy developer account needed! The proxy service handles OAuth and token management for you.
 
-**Planned Features:**
+**Features:**
 - ✅ No Etsy developer account required
 - ✅ Simplified setup process
 - ✅ Automatic token management
 - ✅ Enhanced security with HMAC authentication
-- ✅ Managed service with 99.9% uptime
+- ✅ Managed service
 
-The proxy service code is complete and tested, but I'm finalizing the infrastructure for a reliable, scalable deployment.
+**Setup:**
+1. Go to Settings → Integrations → Add Integration
+2. Search for "Etsy Shop"
+3. Select "Proxy Service" connection mode
+4. Enter your proxy API key and HMAC secret
+5. Authorize with Etsy and select your shop
 
-**Want to be notified when it's ready?** Watch this repository for updates!
+**Note:** Beta access is limited to 20 spots. [Request access by creating an issue](https://github.com/jmdevita/etsy-shop-ha-integration/issues) with the label "beta-access".
 
 ## 📊 Sensors
 
