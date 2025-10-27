@@ -58,10 +58,20 @@
             },
             "reconfigure": {
                 "title": "Reconfigure Etsy API Credentials",
-                "description": "Update your Etsy API credentials for {shop_name}. You'll need your App Keystring and Shared Secret from the Etsy Developer Dashboard.",
+                "description": "Update your Etsy API credentials for {shop_name}.",
                 "data": {
                     "client_id": "App Keystring",
-                    "client_secret": "Shared Secret"
+                    "client_secret": "Shared Secret",
+                    "proxy_url": "Proxy Service URL",
+                    "proxy_api_key": "API Key",
+                    "hmac_secret": "HMAC Secret"
+                },
+                "data_description": {
+                    "client_id": "Your Etsy Developer App Keystring",
+                    "client_secret": "Your Etsy Developer Shared Secret",
+                    "proxy_url": "Your proxy service URL (optional, only if changed)",
+                    "proxy_api_key": "Your proxy API key from the proxy dashboard",
+                    "hmac_secret": "Your proxy shared secret from the proxy dashboard"
                 }
             }
         },
