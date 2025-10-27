@@ -96,33 +96,68 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
     ) -> FlowResult:
         """Handle reconfiguration of the integration."""
         entry = self._get_reconfigure_entry()
-        
+
+        # Get the connection mode from the existing entry
+        connection_mode = entry.data.get(CONF_CONNECTION_MODE, CONNECTION_MODE_DIRECT)
+
         if user_input is not None:
-            # Update the config entry with new credentials
+            # Update the config entry with new credentials based on connection mode
             new_data = dict(entry.data)
-            new_data["auth_implementation_client_id"] = user_input[CONF_CLIENT_ID]
-            new_data["client_secret"] = user_input[CONF_CLIENT_SECRET]
-            
+
+            if connection_mode == CONNECTION_MODE_PROXY:
+                # Update proxy credentials
+                new_data[CONF_PROXY_API_KEY] = user_input[CONF_PROXY_API_KEY]
+                new_data[CONF_HMAC_SECRET] = user_input[CONF_HMAC_SECRET]
+
+                # Optionally update proxy URL if provided
+                if CONF_PROXY_URL in user_input:
+                    proxy_url = user_input[CONF_PROXY_URL].rstrip('/')
+                    if proxy_url.endswith('/api/v1'):
+                        proxy_url = proxy_url[:-7]
+                    new_data[CONF_PROXY_URL] = proxy_url
+            else:
+                # Update direct mode credentials
+                new_data["auth_implementation_client_id"] = user_input[CONF_CLIENT_ID]
+                new_data["client_secret"] = user_input[CONF_CLIENT_SECRET]
+
             # Update and reload the entry
             return self.async_update_reload_and_abort(
                 entry,
                 data=new_data,
                 reason="reconfigure_successful"
             )
-        
-        # Pre-fill current values
-        client_id = entry.data.get("auth_implementation_client_id", "")
-        
-        return self.async_show_form(
-            step_id="reconfigure",
-            data_schema=vol.Schema({
-                vol.Required(CONF_CLIENT_ID, default=client_id): cv.string,
-                vol.Required(CONF_CLIENT_SECRET): cv.string,
-            }),
-            description_placeholders={
-                "shop_name": entry.data.get("shop_name", "your shop"),
-            }
-        )
+
+        # Build form based on connection mode
+        if connection_mode == CONNECTION_MODE_PROXY:
+            # Pre-fill current proxy values
+            proxy_url = entry.data.get(CONF_PROXY_URL, "")
+            proxy_api_key = entry.data.get(CONF_PROXY_API_KEY, "")
+
+            return self.async_show_form(
+                step_id="reconfigure",
+                data_schema=vol.Schema({
+                    vol.Optional(CONF_PROXY_URL, default=proxy_url): cv.string,
+                    vol.Required(CONF_PROXY_API_KEY, default=proxy_api_key): cv.string,
+                    vol.Required(CONF_HMAC_SECRET): cv.string,
+                }),
+                description_placeholders={
+                    "shop_name": entry.data.get("shop_name", "your shop"),
+                }
+            )
+        else:
+            # Pre-fill current direct mode values
+            client_id = entry.data.get("auth_implementation_client_id", "")
+
+            return self.async_show_form(
+                step_id="reconfigure",
+                data_schema=vol.Schema({
+                    vol.Required(CONF_CLIENT_ID, default=client_id): cv.string,
+                    vol.Required(CONF_CLIENT_SECRET): cv.string,
+                }),
+                description_placeholders={
+                    "shop_name": entry.data.get("shop_name", "your shop"),
+                }
+            )
     
     async def async_step_reauth(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle re-authentication for missing credentials."""
@@ -577,19 +612,20 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
         """Create the config entry."""
         # Use shop name with ID and connection type for clarity
         title = f"{self._shop_name} ({self._shop_id}) - Direct" if self._shop_name else f"Etsy Shop {self._shop_id} - Direct"
-        
+
         # Include client_id for direct mode
         config_data = {
             **self.oauth_data,
             "shop_id": self._shop_id,
             "shop_name": self._shop_name,
+            CONF_CONNECTION_MODE: CONNECTION_MODE_DIRECT,
         }
-        
+
         # Add client_id and client_secret for direct mode (needed for OAuth and API headers)
         if self.etsy_credentials:
             config_data["auth_implementation_client_id"] = self.etsy_credentials.get(CONF_CLIENT_ID)
             config_data["client_secret"] = self.etsy_credentials.get(CONF_CLIENT_SECRET)
-        
+
         return self.async_create_entry(
             title=title,
             data=config_data,
