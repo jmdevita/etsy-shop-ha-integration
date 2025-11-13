@@ -3,7 +3,7 @@
 import pytest
 import json
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from pathlib import Path
 from custom_components.etsyapp.sensor import (
     EtsyShopInfo, 
@@ -35,9 +35,10 @@ async def test_etsy_shop_info_sensor():
 
     # Initialize the sensor
     sensor = EtsyShopInfo(mock_coordinator)
+    sensor.async_write_ha_state = Mock()  # Mock to avoid requiring hass instance
 
-    # Call async_update to fetch data
-    await sensor.async_update()
+    # Trigger coordinator update handler
+    sensor._handle_coordinator_update()
 
     # Assert the state and attributes
     assert sensor.state == "TestEtsyShop"
@@ -67,9 +68,10 @@ async def test_etsy_shop_info_sensor_no_data():
 
     # Initialize the sensor
     sensor = EtsyShopInfo(mock_coordinator)
+    sensor.async_write_ha_state = Mock()  # Mock to avoid requiring hass instance
 
-    # Call async_update to fetch data
-    await sensor.async_update()
+    # Trigger coordinator update handler
+    sensor._handle_coordinator_update()
 
     # Assert the state and attributes
     assert sensor.state == "No shop data"
@@ -88,9 +90,10 @@ async def test_etsy_active_listings_sensor():
 
     # Initialize the sensor
     sensor = EtsyActiveListings(mock_coordinator)
+    sensor.async_write_ha_state = Mock()  # Mock to avoid requiring hass instance
 
-    # Call async_update to fetch data
-    await sensor.async_update()
+    # Trigger coordinator update handler
+    sensor._handle_coordinator_update()
 
     # Assert the state and attributes
     assert sensor.state == 2  # listings_count
@@ -113,9 +116,10 @@ async def test_etsy_active_listings_sensor_empty():
 
     # Initialize the sensor
     sensor = EtsyActiveListings(mock_coordinator)
+    sensor.async_write_ha_state = Mock()  # Mock to avoid requiring hass instance
 
-    # Call async_update to fetch data
-    await sensor.async_update()
+    # Trigger coordinator update handler
+    sensor._handle_coordinator_update()
 
     # Assert the state and attributes
     assert sensor.state == 0
@@ -135,9 +139,10 @@ async def test_etsy_recent_orders_sensor():
 
     # Initialize the sensor
     sensor = EtsyRecentOrders(mock_coordinator)
+    sensor.async_write_ha_state = Mock()  # Mock to avoid requiring hass instance
 
-    # Call async_update to fetch data
-    await sensor.async_update()
+    # Trigger coordinator update handler
+    sensor._handle_coordinator_update()
 
     # Assert the state and attributes
     assert sensor.state == 2  # transactions_count
@@ -171,9 +176,10 @@ async def test_etsy_recent_orders_sensor_empty():
 
     # Initialize the sensor
     sensor = EtsyRecentOrders(mock_coordinator)
+    sensor.async_write_ha_state = Mock()  # Mock to avoid requiring hass instance
 
-    # Call async_update to fetch data
-    await sensor.async_update()
+    # Trigger coordinator update handler
+    sensor._handle_coordinator_update()
 
     # Assert the state and attributes
     assert sensor.state == 0
@@ -193,9 +199,10 @@ async def test_etsy_shop_stats_sensor():
 
     # Initialize the sensor
     sensor = EtsyShopStats(mock_coordinator)
+    sensor.async_write_ha_state = Mock()  # Mock to avoid requiring hass instance
 
-    # Call async_update to fetch data
-    await sensor.async_update()
+    # Trigger coordinator update handler
+    sensor._handle_coordinator_update()
 
     # Assert the state includes "total sales" text and correct count
     assert sensor.state == "1500 total sales"
@@ -222,9 +229,10 @@ async def test_etsy_shop_stats_sensor_no_data():
 
     # Initialize the sensor
     sensor = EtsyShopStats(mock_coordinator)
+    sensor.async_write_ha_state = Mock()  # Mock to avoid requiring hass instance
 
-    # Call async_update to fetch data
-    await sensor.async_update()
+    # Trigger coordinator update handler
+    sensor._handle_coordinator_update()
 
     # Assert the state and attributes
     assert sensor.state == "No data"
@@ -259,6 +267,7 @@ async def test_all_sensors_with_partial_data():
     ]
 
     for sensor in sensors:
-        await sensor.async_update()
+        sensor.async_write_ha_state = Mock()  # Mock to avoid requiring hass instance
+        sensor._handle_coordinator_update()
         # All should complete without errors
         assert sensor.state is not None
