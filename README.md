@@ -94,7 +94,7 @@ No Etsy developer account needed! The proxy service handles OAuth and token mana
 4. Enter your proxy API key and HMAC secret
 5. Authorize with Etsy and select your shop
 
-**Note:** Beta access is limited to 20 spots. [Request access by creating an issue](https://github.com/jmdevita/etsy-shop-ha-integration/issues) with the label "beta-access".
+**Note:** Beta access is limited to 20 spots. Please register [here](https://bridge.ctrlprinthome.com/) and then [request access by creating an issue](https://github.com/jmdevita/etsy-shop-ha-integration/issues) with the label "beta-access".
 
 ## 📊 Sensors
 
