@@ -276,6 +276,14 @@ class EtsyRecentOrders(CoordinatorEntity, SensorEntity):
                     except (ValueError, TypeError):
                         updated_date = transaction.get("updated_timestamp")
 
+                # Extract variation selections (e.g., size, color, version)
+                variations = []
+                for variation in transaction.get("variations", []):
+                    variations.append({
+                        "property": variation.get("formatted_name", ""),
+                        "value": variation.get("formatted_value", ""),
+                    })
+
                 summary = {
                     "transaction_id": str(transaction.get("transaction_id", "")),  # Keep as string
                     "title": transaction.get("title"),
@@ -284,6 +292,7 @@ class EtsyRecentOrders(CoordinatorEntity, SensorEntity):
                     "quantity": transaction.get("quantity"),
                     "price_amount": amount,
                     "price_currency": currency,
+                    "variations": variations,
                     "created_date": created_date,
                     "updated_date": updated_date,
                 }
