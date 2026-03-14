@@ -21,6 +21,7 @@ from .const import (
     EMPTY_ATTRIBUTES,
 )
 from .coordinator import EtsyConfigEntry, EtsyUpdateCoordinator
+from .utils import build_transaction_detail
 
 PLATFORMS = [Platform.SENSOR]
 _LOGGER = logging.getLogger(__name__)
@@ -255,47 +256,9 @@ class EtsyRecentOrders(CoordinatorEntity, SensorEntity):
             transactions_summary = []
             total_revenue = 0
 
-            for transaction in transactions[:self._display_limit]:  # Show configured number of transactions
-                price = transaction.get("price", {})
-                amount = float(price.get("amount", 0)) / 100 if price.get("amount") else 0
-                currency = price.get("currency_code", "USD")
-
-                total_revenue += amount
-
-                # Format timestamps to readable dates
-                created_date = None
-                updated_date = None
-                if transaction.get("created_timestamp"):
-                    try:
-                        created_date = datetime.fromtimestamp(transaction["created_timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
-                    except (ValueError, TypeError):
-                        created_date = transaction.get("created_timestamp")
-                if transaction.get("updated_timestamp"):
-                    try:
-                        updated_date = datetime.fromtimestamp(transaction["updated_timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
-                    except (ValueError, TypeError):
-                        updated_date = transaction.get("updated_timestamp")
-
-                # Extract variation selections (e.g., size, color, version)
-                variations = []
-                for variation in transaction.get("variations", []):
-                    variations.append({
-                        "property": variation.get("formatted_name", ""),
-                        "value": variation.get("formatted_value", ""),
-                    })
-
-                summary = {
-                    "transaction_id": str(transaction.get("transaction_id", "")),  # Keep as string
-                    "title": transaction.get("title"),
-                    "listing_id": str(transaction.get("listing_id", "")),  # Keep as string
-                    "buyer_user_id": str(transaction.get("buyer_user_id", "")),  # Keep as string
-                    "quantity": transaction.get("quantity"),
-                    "price_amount": amount,
-                    "price_currency": currency,
-                    "variations": variations,
-                    "created_date": created_date,
-                    "updated_date": updated_date,
-                }
+            for transaction in transactions[:self._display_limit]:
+                summary = build_transaction_detail(transaction)
+                total_revenue += summary["price_amount"]
                 transactions_summary.append(summary)
 
             self._hass_custom_attributes = {

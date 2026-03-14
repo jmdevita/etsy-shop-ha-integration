@@ -28,6 +28,7 @@ from .const import (
     CONF_HMAC_SECRET,
 )
 from .hmac_client import HMACClient
+from .utils import build_transaction_detail
 
 _LOGGER = logging.getLogger(__name__)
 type EtsyConfigEntry = ConfigEntry[EtsyUpdateCoordinator]
@@ -560,13 +561,23 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
         # Check for new orders (transactions)
         current_transactions_count = data.get("transactions_count", 0)
         if current_transactions_count > self._prev_transactions_count and self._prev_transactions_count > 0:
+            new_order_count = current_transactions_count - self._prev_transactions_count
             _LOGGER.debug("New order detected! Count increased from %s to %s", self._prev_transactions_count, current_transactions_count)
+
+            # Build detailed transaction data for the new orders
+            transactions = data.get("transactions", [])
+            new_transactions = [
+                build_transaction_detail(t)
+                for t in transactions[:new_order_count]
+            ]
+
             self._hass.bus.async_fire(
                 f"{DOMAIN}_new_order",
                 {
                     "device_id": device_id,
                     "shop_name": shop.get("shop_name"),
-                    "new_orders": current_transactions_count - self._prev_transactions_count,
+                    "new_orders": new_order_count,
+                    "orders": new_transactions,
                 }
             )
         self._prev_transactions_count = current_transactions_count

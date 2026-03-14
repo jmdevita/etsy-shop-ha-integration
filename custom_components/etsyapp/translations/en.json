@@ -130,6 +130,16 @@
                     "description": "Whether to include recent transaction details"
                 }
             }
+        },
+        "fire_test_event": {
+            "name": "Fire Test Event",
+            "description": "Fire a test event to verify automations and triggers without waiting for a real order",
+            "fields": {
+                "event_type": {
+                    "name": "Event Type",
+                    "description": "The type of event to simulate (new_order, new_review, or low_stock)"
+                }
+            }
         }
     },
     "application_credentials": {
