@@ -23,3 +23,22 @@ get_shop_stats:
       required: false
       selector:
         boolean:
+
+fire_test_event:
+  name: Fire Test Event
+  description: Fire a test event to verify automations and triggers without waiting for a real order
+  fields:
+    event_type:
+      name: Event Type
+      description: The type of event to simulate
+      default: new_order
+      required: false
+      selector:
+        select:
+          options:
+            - label: New Order
+              value: new_order
+            - label: New Review
+              value: new_review
+            - label: Low Stock
+              value: low_stock
