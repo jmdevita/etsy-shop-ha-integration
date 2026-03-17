@@ -234,7 +234,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                 "listings": listings_data.get("results", []),
                 "listings_count": listings_data.get("count", 0),  # Changed from "active_listings_count" to "listings_count"
                 "transactions": transactions_data.get("results", []),
-                "transactions_count": len(transactions_data.get("results", [])),  # Added for consistency
+                "transactions_count": transactions_data.get("count", len(transactions_data.get("results", []))),
                 "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),  # Match format with direct mode
             }
             
