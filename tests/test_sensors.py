@@ -6,10 +6,11 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, Mock
 from pathlib import Path
 from custom_components.etsyapp.sensor import (
-    EtsyShopInfo, 
-    EtsyActiveListings, 
-    EtsyRecentOrders, 
-    EtsyShopStats
+    EtsyShopInfo,
+    EtsyActiveListings,
+    EtsyRecentOrders,
+    EtsyLastOrder,
+    EtsyShopStats,
 )
 from custom_components.etsyapp.coordinator import EtsyUpdateCoordinator
 
@@ -145,12 +146,12 @@ async def test_etsy_recent_orders_sensor():
     sensor._handle_coordinator_update()
 
     # Assert the state and attributes
-    assert sensor.state == 2  # transactions_count
-    assert sensor.extra_state_attributes["transactions_count"] == 2
-    assert len(sensor.extra_state_attributes["recent_transactions"]) == 2
-    assert sensor.extra_state_attributes["total_recent_revenue"] == 70.0  # 25.00 + 45.00
+    assert sensor.state == 3  # transactions_count
+    assert sensor.extra_state_attributes["transactions_count"] == 3
+    assert len(sensor.extra_state_attributes["recent_transactions"]) == 3
+    assert sensor.extra_state_attributes["total_recent_revenue"] == 94.0  # 25.00*1 + 12.00*2 + 45.00*1
     assert sensor.extra_state_attributes["currency_code"] == "USD"
-    assert sensor._attr_icon == "mdi:numeric-2-circle"
+    assert sensor._attr_icon == "mdi:numeric-3-circle"
     
     # Check that transaction IDs and dates are properly formatted
     first_transaction = sensor.extra_state_attributes["recent_transactions"][0]
@@ -188,6 +189,60 @@ async def test_etsy_recent_orders_sensor_empty():
 
 
 @pytest.mark.asyncio
+async def test_etsy_last_order_sensor():
+    """Test the EtsyLastOrder sensor groups transactions by receipt_id."""
+    # Mock the coordinator
+    mock_coordinator = AsyncMock(spec=EtsyUpdateCoordinator)
+    mock_coordinator.data = etsy_data
+    mock_coordinator.config_entry = AsyncMock()
+    mock_coordinator.config_entry.entry_id = "test_entry_id"
+    mock_coordinator.config_entry.options = {}
+
+    # Initialize the sensor
+    sensor = EtsyLastOrder(mock_coordinator)
+    sensor.async_write_ha_state = Mock()  # Mock to avoid requiring hass instance
+
+    # Trigger coordinator update handler
+    sensor._handle_coordinator_update()
+
+    # The most recent order is receipt_id 5550001 (timestamp 1693843200)
+    # It has 2 transactions: Wallet (qty 1, $25) + Keychain (qty 2, $12)
+    assert sensor.state == 3  # total quantity: 1 + 2
+    assert sensor.extra_state_attributes["receipt_id"] == "5550001"
+    assert sensor.extra_state_attributes["buyer_user_id"] == "22222222"
+    assert sensor.extra_state_attributes["item_count"] == 2  # 2 distinct SKUs
+    assert sensor.extra_state_attributes["order_total"] == 49.0  # 25 + (12 * 2)
+    assert sensor.extra_state_attributes["currency_code"] == "USD"
+    assert len(sensor.extra_state_attributes["items"]) == 2
+    assert sensor._attr_icon == "mdi:cart"
+
+    # Verify item details
+    items = sensor.extra_state_attributes["items"]
+    titles = [item["title"] for item in items]
+    assert "Handmade Leather Wallet" in titles
+    assert "Matching Leather Keychain" in titles
+
+
+@pytest.mark.asyncio
+async def test_etsy_last_order_sensor_empty():
+    """Test the EtsyLastOrder sensor with no transactions."""
+    mock_coordinator = AsyncMock(spec=EtsyUpdateCoordinator)
+    mock_coordinator.data = empty_data
+    mock_coordinator.config_entry = AsyncMock()
+    mock_coordinator.config_entry.entry_id = "test_entry_id"
+    mock_coordinator.config_entry.options = {}
+
+    sensor = EtsyLastOrder(mock_coordinator)
+    sensor.async_write_ha_state = Mock()
+
+    sensor._handle_coordinator_update()
+
+    assert sensor.state == 0
+    assert sensor._attr_icon == "mdi:cart-off"
+    assert sensor.extra_state_attributes == {}
+
+
+@pytest.mark.asyncio
 async def test_etsy_shop_stats_sensor():
     """Test the EtsyShopStats sensor with valid data."""
     # Mock the coordinator
@@ -208,10 +263,10 @@ async def test_etsy_shop_stats_sensor():
     assert sensor.state == "1500 total sales"
     assert sensor.extra_state_attributes["total_sales"] == 1500
     assert sensor.extra_state_attributes["active_listings"] == 2
-    assert sensor.extra_state_attributes["recent_transactions"] == 2
+    assert sensor.extra_state_attributes["recent_transactions"] == 3
     assert sensor.extra_state_attributes["total_views"] == 430
     assert sensor.extra_state_attributes["total_favorites"] == 20
-    assert sensor.extra_state_attributes["recent_revenue"] == 70.0
+    assert sensor.extra_state_attributes["recent_revenue"] == 94.0
     assert sensor.extra_state_attributes["shop_currency"] == "USD"
     assert sensor.extra_state_attributes["average_rating"] == 4.8
     assert sensor.extra_state_attributes["total_reviews"] == 125
@@ -261,9 +316,10 @@ async def test_all_sensors_with_partial_data():
     # Test all sensors
     sensors = [
         EtsyShopInfo(mock_coordinator),
-        EtsyActiveListings(mock_coordinator), 
+        EtsyActiveListings(mock_coordinator),
         EtsyRecentOrders(mock_coordinator),
-        EtsyShopStats(mock_coordinator)
+        EtsyLastOrder(mock_coordinator),
+        EtsyShopStats(mock_coordinator),
     ]
 
     for sensor in sensors:

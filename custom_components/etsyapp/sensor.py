@@ -1,5 +1,6 @@
 """Integration for Etsy shop monitoring sensors."""
 
+from collections import defaultdict
 from datetime import datetime
 import logging
 from typing import Any
@@ -40,6 +41,7 @@ async def async_setup_entry(
             EtsyShopInfo(coordinator),
             EtsyActiveListings(coordinator),
             EtsyRecentOrders(coordinator),
+            EtsyLastOrder(coordinator),
             EtsyShopStats(coordinator),
         ],
         update_before_add=True,
@@ -258,7 +260,7 @@ class EtsyRecentOrders(CoordinatorEntity, SensorEntity):
 
             for transaction in transactions[:self._display_limit]:
                 summary = build_transaction_detail(transaction)
-                total_revenue += summary["price_amount"]
+                total_revenue += summary["price_amount"] * (summary.get("quantity") or 1)
                 transactions_summary.append(summary)
 
             self._hass_custom_attributes = {
@@ -267,6 +269,116 @@ class EtsyRecentOrders(CoordinatorEntity, SensorEntity):
                 "total_recent_revenue": round(total_revenue, 2),
                 "currency_code": transactions_summary[0]["price_currency"] if transactions_summary else "USD",
             }
+
+        self.async_write_ha_state()
+
+
+class EtsyLastOrder(CoordinatorEntity, SensorEntity):
+    """Representation of sensor that shows the most recent order with per-SKU breakdown."""
+
+    def __init__(self, coordinator: EtsyUpdateCoordinator) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._hass_custom_attributes = {}
+        self._attr_name = "Etsy Last Order"
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_last_order"
+        self._globalid = "etsy_last_order"
+        self._attr_icon = "mdi:cart"
+        self._attr_state = None
+        # Associate with device
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, coordinator.config_entry.entry_id)},
+        }
+
+    @property
+    def state(self) -> Any:
+        """Return the current state of the sensor."""
+        return self._attr_state
+
+    @property
+    def extra_state_attributes(self):
+        """Return the state attributes of the sensor."""
+        return self._hass_custom_attributes
+
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        etsy_data = self.coordinator.data
+
+        if not etsy_data:
+            self._attr_state = 0
+            self._attr_icon = "mdi:cart-off"
+            self._hass_custom_attributes = {}
+            self.async_write_ha_state()
+            return
+
+        transactions = etsy_data.get("transactions", [])
+        if not transactions:
+            self._attr_state = 0
+            self._attr_icon = "mdi:cart-off"
+            self._hass_custom_attributes = {}
+            self.async_write_ha_state()
+            return
+
+        # Group transactions by receipt_id to identify items from the same order
+        grouped = defaultdict(list)
+        for txn in transactions:
+            receipt_id = txn.get("receipt_id")
+            if receipt_id:
+                grouped[str(receipt_id)].append(txn)
+            else:
+                # Fallback: treat each transaction as its own order
+                grouped[str(txn.get("transaction_id", ""))].append(txn)
+
+        # Find the most recent order group by max created_timestamp
+        most_recent_receipt = None
+        most_recent_timestamp = 0
+        for receipt_id, txns in grouped.items():
+            group_timestamp = max(
+                t.get("created_timestamp", 0) for t in txns
+            )
+            if group_timestamp > most_recent_timestamp:
+                most_recent_timestamp = group_timestamp
+                most_recent_receipt = receipt_id
+
+        if not most_recent_receipt:
+            self._attr_state = 0
+            self._attr_icon = "mdi:cart-off"
+            self._hass_custom_attributes = {}
+            self.async_write_ha_state()
+            return
+
+        order_transactions = grouped[most_recent_receipt]
+
+        # Build per-item details
+        items = []
+        order_total = 0
+        total_quantity = 0
+        for txn in order_transactions:
+            detail = build_transaction_detail(txn)
+            items.append(detail)
+            qty = detail.get("quantity") or 1
+            order_total += detail["price_amount"] * qty
+            total_quantity += qty
+
+        # Get order-level info from the first transaction
+        first_item = items[0]
+        order_date = min(
+            (item["created_date"] for item in items if item.get("created_date")),
+            default=None,
+        )
+
+        self._attr_state = total_quantity
+        self._attr_icon = "mdi:cart"
+
+        self._hass_custom_attributes = {
+            "receipt_id": most_recent_receipt,
+            "buyer_user_id": first_item.get("buyer_user_id"),
+            "order_total": round(order_total, 2),
+            "currency_code": first_item.get("price_currency", "USD"),
+            "order_date": order_date,
+            "item_count": len(items),
+            "items": items,
+        }
 
         self.async_write_ha_state()
 
@@ -327,7 +439,8 @@ class EtsyShopStats(CoordinatorEntity, SensorEntity):
             for transaction in transactions:
                 price = transaction.get("price", {})
                 if price.get("amount"):
-                    recent_revenue += float(price["amount"]) / 100
+                    qty = transaction.get("quantity") or 1
+                    recent_revenue += float(price["amount"]) / 100 * qty
 
             self._hass_custom_attributes = {
                 "total_sales": sale_count,

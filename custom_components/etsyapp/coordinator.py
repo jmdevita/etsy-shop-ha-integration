@@ -1,5 +1,6 @@
 """Integration for Etsy shop monitoring coordinator."""
 
+from collections import defaultdict
 from datetime import timedelta, datetime
 import asyncio
 import json
@@ -566,9 +567,24 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
 
             # Build detailed transaction data for the new orders
             transactions = data.get("transactions", [])
-            new_transactions = [
-                build_transaction_detail(t)
-                for t in transactions[:new_order_count]
+            new_transactions = []
+            receipt_groups = defaultdict(list)
+            for t in transactions[:new_order_count]:
+                detail = build_transaction_detail(t)
+                new_transactions.append(detail)
+                # Group by receipt_id for per-order access
+                receipt_id = t.get("receipt_id")
+                key = str(receipt_id) if receipt_id else str(t.get("transaction_id", ""))
+                receipt_groups[key].append(detail)
+
+            receipts = [
+                {
+                    "receipt_id": rid,
+                    "buyer_user_id": items[0].get("buyer_user_id"),
+                    "item_count": len(items),
+                    "items": items,
+                }
+                for rid, items in receipt_groups.items()
             ]
 
             self._hass.bus.async_fire(
@@ -578,6 +594,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                     "shop_name": shop.get("shop_name"),
                     "new_orders": new_order_count,
                     "orders": new_transactions,
+                    "receipts": receipts,
                 }
             )
         self._prev_transactions_count = current_transactions_count
