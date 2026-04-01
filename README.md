@@ -5,6 +5,8 @@
 [![HACS Compatible](https://img.shields.io/badge/HACS-Compatible-green.svg)](https://hacs.xyz)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+> **⚠️ Registration Full**: The proxy service has reached Etsy's personal application user limit. I've paused new registrations while I apply for commercial API access. Existing accounts are unaffected.
+
 Monitor your Etsy shop metrics directly in Home Assistant with regular updates on listings, orders, and shop statistics.
 
 ## ✨ Features
