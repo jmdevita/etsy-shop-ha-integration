@@ -36,6 +36,7 @@ def build_transaction_detail(transaction: dict) -> dict:
 
     return {
         "transaction_id": str(transaction.get("transaction_id", "")),
+        "receipt_id": str(transaction.get("receipt_id", "")),
         "title": transaction.get("title"),
         "listing_id": str(transaction.get("listing_id", "")),
         "buyer_user_id": str(transaction.get("buyer_user_id", "")),

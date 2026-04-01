@@ -87,9 +87,9 @@ async def test_etsy_update_coordinator(hass, aioclient_mock):
     assert coordinator.last_update_success
     assert coordinator.data['shop']['shop_name'] == "TestEtsyShop"
     assert coordinator.data['listings_count'] == 2
-    assert coordinator.data['transactions_count'] == 2
+    assert coordinator.data['transactions_count'] == 3
     assert len(coordinator.data['listings']) == 2
-    assert len(coordinator.data['transactions']) == 2
+    assert len(coordinator.data['transactions']) == 3
 
 
 @pytest.mark.asyncio
@@ -218,7 +218,7 @@ async def test_token_refresh_returns_cached_data(hass, aioclient_mock):
         "listings": etsy_data["listings"],
         "transactions": etsy_data["transactions"],
         "listings_count": 2,
-        "transactions_count": 2,
+        "transactions_count": 3,
         "last_updated": "2025-01-01 00:00:00.000000"
     }
     

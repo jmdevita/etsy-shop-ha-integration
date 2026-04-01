@@ -133,6 +133,14 @@ async def async_register_services(hass: HomeAssistant):
                     "shop_name": shop_name,
                     "new_orders": 1,
                     "orders": [order_detail],
+                    "receipts": [
+                        {
+                            "receipt_id": order_detail.get("receipt_id", "0000000000"),
+                            "buyer_user_id": order_detail.get("buyer_user_id", "0000000000"),
+                            "item_count": 1,
+                            "items": [order_detail],
+                        }
+                    ],
                 }
 
             elif event_type == "new_review":

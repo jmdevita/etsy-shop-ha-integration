@@ -49,6 +49,7 @@
   "transactions": [
     {
       "transaction_id": 111111111,
+      "receipt_id": 5550001,
       "title": "Handmade Leather Wallet",
       "listing_id": 123456789,
       "buyer_user_id": 22222222,
@@ -62,7 +63,23 @@
       "updated_timestamp": 1693843200
     },
     {
+      "transaction_id": 222222222,
+      "receipt_id": 5550001,
+      "title": "Matching Leather Keychain",
+      "listing_id": 123456790,
+      "buyer_user_id": 22222222,
+      "quantity": 2,
+      "price": {
+        "amount": 1200,
+        "divisor": 100,
+        "currency_code": "USD"
+      },
+      "created_timestamp": 1693843200,
+      "updated_timestamp": 1693843200
+    },
+    {
       "transaction_id": 333333333,
+      "receipt_id": 5550002,
       "title": "Custom Wood Sign",
       "listing_id": 987654321,
       "buyer_user_id": 44444444,
@@ -77,6 +94,6 @@
     }
   ],
   "listings_count": 2,
-  "transactions_count": 2,
+  "transactions_count": 3,
   "last_updated": "2023-09-04 10:00:00.000000"
 }
