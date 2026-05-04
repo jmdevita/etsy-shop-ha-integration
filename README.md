@@ -5,8 +5,6 @@
 [![HACS Compatible](https://img.shields.io/badge/HACS-Compatible-green.svg)](https://hacs.xyz)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **⚠️ Registration Full**: The proxy service has reached Etsy's personal application user limit. I've paused new registrations while I apply for commercial API access. Existing accounts are unaffected.
-
 Monitor your Etsy shop metrics directly in Home Assistant with regular updates on listings, orders, and shop statistics.
 
 ## ✨ Features
@@ -76,9 +74,9 @@ Best for users with Etsy developer accounts who want direct API access.
    - You'll be redirected to Etsy to authorize the app
    - Select which shop to monitor (if you have multiple)
 
-### Proxy Service Connection (Beta)
+### Proxy Service Connection
 
-**Status: Now Available in Beta**
+**Status: Available — Approved for Etsy Commercial Access**
 
 No Etsy developer account needed! The proxy service handles OAuth and token management for you.
 
@@ -96,7 +94,7 @@ No Etsy developer account needed! The proxy service handles OAuth and token mana
 4. Enter your proxy API key and HMAC secret
 5. Authorize with Etsy and select your shop
 
-**Note:** Beta access is limited to 20 spots. Please register [here](https://bridge.ctrlprinthome.com/) and then [request access by creating an issue](https://github.com/jmdevita/etsy-shop-ha-integration/issues) with the label "beta-access".
+**Note:** Sign up at [bridge.ctrlprinthome.com](https://bridge.ctrlprinthome.com/) to join the waitlist. Approval is manual but typically quick — you'll receive an invite email once your account is ready.
 
 ## 📊 Sensors
 
