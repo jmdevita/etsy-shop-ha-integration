@@ -1,0 +1,15 @@
+# Etsy at-a-glance card
+#
+# A compact alternative to the full dashboard card. Shows the three headline
+# numbers as a single glance row. Use this if you want the basic stats without
+# the recent-sales feed.
+
+type: glance
+title: Etsy at a glance
+entities:
+  - entity: sensor.etsy_active_listings
+    name: Listings
+  - entity: sensor.etsy_recent_orders
+    name: Recent
+  - entity: sensor.etsy_shop_statistics
+    name: Sales

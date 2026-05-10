@@ -55,7 +55,19 @@ Each integration entry is named `ShopName (ShopID) - Direct` or `ShopName (ShopI
 | Etsy Shop Info | Shop name | Shop ID, currency, creation date, announcement, sale message |
 | Etsy Active Listings | Active listing count | Recent listings, total views, total favorites |
 | Etsy Recent Orders | Recent transaction count | Transaction details, recent revenue, buyer info |
+| Etsy Last Order | Last order quantity | Item title, price, variations, buyer info |
 | Etsy Shop Statistics | Total sales count | Active listings, views, favorites, revenue, ratings |
+
+## Sample dashboard cards
+
+The five sensors render as plain tiles by default, but the rich attribute data can be pulled into a polished overview using only built-in Lovelace cards — no HACS, no custom-card dependencies.
+
+Two ready-to-use examples live in [`examples/`](./examples):
+
+- **[`examples/dashboard-card.yaml`](./examples/dashboard-card.yaml)** — full overview: shop name, recent revenue, average rating, and a recent-sales feed with compact relative timestamps. Built as a `vertical-stack` of markdown cards.
+- **[`examples/glance-card.yaml`](./examples/glance-card.yaml)** — compact alternative showing just the three headline numbers as a glance row.
+
+To use either: open the file, copy its contents, then in Home Assistant go to **Edit Dashboard → Add Card → Manual** and paste.
 
 ## Services
 

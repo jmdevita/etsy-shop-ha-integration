@@ -1,0 +1,55 @@
+# Etsy Shop dashboard card
+#
+# A polished overview built from default sensors, with no HACS or custom-card
+# dependencies. Drop this into a manual card on your dashboard:
+#   Edit Dashboard → Add Card → Manual → paste below.
+#
+# Layout:
+#   - Shop name as a heading
+#   - Two-up dual stat band: recent revenue + average rating
+#   - Recent sales feed with truncated titles and compact relative timestamps
+#
+# All values are pulled from the integration's sensor attributes.
+
+type: vertical-stack
+cards:
+  # ── Shop name header ──
+  - type: markdown
+    content: |
+      ## {{ states('sensor.etsy_shop_info') }}
+
+  # ── Two-up dual stat: revenue + rating ──
+  - type: horizontal-stack
+    cards:
+      - type: markdown
+        content: |
+          ### {{ state_attr('sensor.etsy_shop_statistics', 'shop_currency') | default('$') }}{{ state_attr('sensor.etsy_recent_orders', 'total_recent_revenue') | default('0.00') }}
+          *Recent revenue*
+      - type: markdown
+        content: |
+          ### ⭐ {{ state_attr('sensor.etsy_shop_statistics', 'average_rating') | default(0) | round(1) }}
+          *{{ state_attr('sensor.etsy_shop_statistics', 'total_reviews') | default(0) }} reviews*
+
+  # ── Recent sales feed ──
+  # Long titles are truncated; timestamps render as "5m", "3h", "yesterday",
+  # or "Apr 25" depending on age.
+  - type: markdown
+    content: |
+      **Recent sales**
+      {% set transactions = state_attr('sensor.etsy_recent_orders', 'recent_transactions') %}
+      {% if transactions %}
+      {% for tx in transactions[:5] %}
+      {%- set title = tx.title if tx.title|length <= 38 else tx.title[:36] ~ '…' -%}
+      {%- set ts = (strptime(tx.created_date, '%Y-%m-%d %H:%M:%S', default=none) | as_local | as_timestamp) if tx.created_date else 0 -%}
+      {%- set ago = (now() | as_timestamp) - ts if ts else 0 -%}
+      {%- if ts and ago < 3600 -%}{%- set when = (ago // 60) | int ~ 'm' -%}
+      {%- elif ts and ago < 86400 -%}{%- set when = (ago // 3600) | int ~ 'h' -%}
+      {%- elif ts and ago < 172800 -%}{%- set when = 'yesterday' -%}
+      {%- elif ts -%}{%- set when = (ts | timestamp_custom('%b %e')) | trim -%}
+      {%- else -%}{%- set when = tx.created_date -%}
+      {%- endif -%}
+      - **{{ title }}** — {{ tx.price_currency }}{{ '%.2f' | format(tx.price_amount) }}{% if tx.quantity and tx.quantity > 1 %} × {{ tx.quantity }}{% endif %} *· {{ when }}*
+      {% endfor %}
+      {% else %}
+      *No recent transactions yet.*
+      {% endif %}
