@@ -5,157 +5,85 @@
 [![HACS Compatible](https://img.shields.io/badge/HACS-Compatible-green.svg)](https://hacs.xyz)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Monitor your Etsy shop metrics directly in Home Assistant with regular updates on listings, orders, and shop statistics.
+A Home Assistant custom integration that pulls data from your Etsy shop — listings, orders, and shop stats — and exposes them as sensors you can use in dashboards and automations.
 
-## ✨ Features
+You can connect either with your own Etsy developer credentials (Direct mode) or through a hosted proxy that handles OAuth for you (Proxy mode).
 
-- 📊 **Real-time Shop Monitoring**: Track sales, listings, and transactions
-- 🔐 **Secure OAuth2 Authentication**: OAuth2 with PKCE support (Big thanks to @svrooij for implementing [this feature](https://github.com/home-assistant/core/pull/139509))
-- 🏪 **Multi-Shop Support**: Monitor multiple Etsy shops from one integration
-- 🎯 **Dual Connection Modes**: Direct API (with dev key) or Proxy Service (coming soon)
-- 📈 **Four Sensors**: Shop info, active listings, recent orders, and statistics
-- 🔄 **Automatic Updates**: Configurable refresh intervals (60-3600 seconds) for Direct API
-- 🛠️ **Service Calls**: Manual refresh and detailed statistics retrieval
+[![Get started in 2 minutes](https://img.shields.io/badge/No_Etsy_developer_account%3F-Get_started_in_2_minutes_%E2%86%92-orange?style=for-the-badge&logo=etsy&logoColor=white)](https://bridge.ctrlprinthome.com/)
 
-## 📦 Installation
+Don't want to register an Etsy app or manage OAuth credentials? Sign up at [bridge.ctrlprinthome.com](https://bridge.ctrlprinthome.com/), grab an API key, and jump to *Proxy Service* setup below.
 
-### Prerequisites
+## Installation
 
-- Home Assistant 2025.8.3+
-- Etsy seller account with active shop
-- (Direct API) Etsy developer account for access
-- (Coming Soon) Free Tier for Proxy Service, where no dev account is needed.
+### HACS
 
-### Method 1: HACS (Recommended)
+1. In HACS, open the three-dots menu and choose *Custom repositories*.
+2. Add `https://github.com/jmdevita/etsy-shop-ha-integration` as an *Integration*.
+3. Install "Etsy Shop" and restart Home Assistant.
 
-1. Open HACS in Home Assistant
-2. Click on "Integrations"
-3. Click the three dots menu and select "Custom repositories"
-4. Add this repository URL and select "Integration" as the category
-5. Click "Install" on the Etsy Shop integration
-6. Restart Home Assistant
+### Manual
 
-### Method 2: Manual Installation
+Copy `custom_components/etsyapp` into your Home Assistant `custom_components` directory and restart.
 
-1. Copy the `custom_components/etsyapp` folder to your Home Assistant's `custom_components` directory
-2. Restart Home Assistant
+## Setup
 
-## 🏷️ Naming Convention
+### Direct Etsy API
 
-When you add an Etsy Shop integration, it will be named:
-- **Integration Name**: `ShopName (ShopID) - Direct` or `ShopName (ShopID) - Proxy`
-  - Example: `TestEtsyShop (56636211) - Direct`
-- **Device Name**: Just the shop name (e.g., `TestEtsyShop`)
+If you have (or are willing to register for) an Etsy developer account, this is the most straightforward option.
 
-This naming helps distinguish between:
-- Multiple shops (each has a unique ID)
-- Connection types (Direct API vs Proxy)
+1. Create an app at the [Etsy Developer Dashboard](https://www.etsy.com/developers/your-apps) and note the App Keystring and Shared Secret.
+2. In Home Assistant, go to *Settings → Devices & Services → Add Integration* and search for "Etsy Shop".
+3. Pick *Direct Etsy API* and paste in the keystring and secret.
+4. Authorize the app on Etsy and pick which shop to monitor (if you have more than one).
 
-## 🚀 Setup
+### Proxy Service
 
-### Direct Etsy API Connection (Available Now)
+For users who don't want to manage their own Etsy developer credentials. The proxy holds the OAuth client and refreshes tokens on your behalf; your Home Assistant instance authenticates to it with an API key and HMAC secret.
 
-Best for users with Etsy developer accounts who want direct API access.
+1. Sign up at [bridge.ctrlprinthome.com](https://bridge.ctrlprinthome.com/). Approval is manual but usually quick.
+2. Once you receive your credentials, add the integration as above and select *Proxy Service*.
+3. Enter the API key and HMAC secret, authorize with Etsy, and pick a shop.
 
-1. **Create an Etsy App**:
-   - Visit [Etsy Developer Dashboard](https://www.etsy.com/developers/your-apps)
-   - Create a new app and note your App Keystring and Shared Secret
+## Naming
 
-2. **Add Integration**:
-   - Go to Settings → Integrations → Add Integration
-   - Search for "Etsy Shop"
-   - Select "Direct Etsy API" connection mode
+Each integration entry is named `ShopName (ShopID) - Direct` or `ShopName (ShopID) - Proxy` (for example, `TestEtsyShop (56636211) - Direct`). The device itself uses just the shop name. This keeps things readable when you're running multiple shops or both connection modes side by side.
 
-3. **Enter Credentials**:
-   - App Keystring: Your Etsy app's keystring
-   - Shared Secret: Your Etsy app's shared secret
+## Sensors
 
-4. **Authorize**:
-   - You'll be redirected to Etsy to authorize the app
-   - Select which shop to monitor (if you have multiple)
+| Sensor | State | Attributes |
+| --- | --- | --- |
+| Etsy Shop Info | Shop name | Shop ID, currency, creation date, announcement, sale message |
+| Etsy Active Listings | Active listing count | Recent listings, total views, total favorites |
+| Etsy Recent Orders | Recent transaction count | Transaction details, recent revenue, buyer info |
+| Etsy Shop Statistics | Total sales count | Active listings, views, favorites, revenue, ratings |
 
-### Proxy Service Connection
+## Services
 
-**Status: Available — Approved for Etsy Commercial Access**
+- `etsyapp.refresh_data` — force a poll of the Etsy API.
+- `etsyapp.get_shop_stats` — return detailed shop statistics, with optional filtering for listings and transactions.
 
-No Etsy developer account needed! The proxy service handles OAuth and token management for you.
+## Options
 
-**Features:**
-- ✅ No Etsy developer account required
-- ✅ Simplified setup process
-- ✅ Automatic token management
-- ✅ Enhanced security with HMAC authentication
-- ✅ Managed service
+After setup you can adjust:
 
-**Setup:**
-1. Go to Settings → Integrations → Add Integration
-2. Search for "Etsy Shop"
-3. Select "Proxy Service" connection mode
-4. Enter your proxy API key and HMAC secret
-5. Authorize with Etsy and select your shop
+- Listings display limit (1–25)
+- Transactions display limit (1–25)
+- Stock threshold for the low-stock trigger (1–100)
+- Update interval (60–3600 seconds, Direct mode only)
 
-**Note:** Sign up at [bridge.ctrlprinthome.com](https://bridge.ctrlprinthome.com/) to join the waitlist. Approval is manual but typically quick — you'll receive an invite email once your account is ready.
+## Device Triggers
 
-## 📊 Sensors
+The integration registers three device triggers for use in automations:
 
-The integration provides four sensors with detailed attributes:
+- `new_order` — fires when a new order is detected
+- `new_review` — fires on a new review
+- `low_stock` — fires when a listing drops below the configured stock threshold
 
-### 1. Etsy Shop Info
-- **State**: Shop name
-- **Attributes**: Shop ID, currency, creation date, announcement, sale message
+Example:
 
-### 2. Etsy Active Listings
-- **State**: Number of active listings
-- **Attributes**: Recent listings details, total views, total favorites
-
-### 3. Etsy Recent Orders
-- **State**: Number of recent transactions
-- **Attributes**: Transaction details, recent revenue, buyer information
-
-### 4. Etsy Shop Statistics
-- **State**: Total sales count
-- **Attributes**: Active listings, total views, favorites, revenue, ratings
-
-## 🛠️ Services
-
-### `etsyapp.refresh_data`
-Manually refresh shop data from Etsy API.
-
-### `etsyapp.get_shop_stats`
-Get detailed shop statistics with optional filtering for listings and transactions.
-
-## 🔧 Configuration Options
-
-After setup, you can configure:
-- **Listings Display Limit**: Number of listings to show in sensor attributes (1-25)
-- **Transactions Display Limit**: Number of recent orders to display (1-25)
-- **Stock Threshold**: Alert when stock falls below this number (1-100)
-
-## 🧪 Development
-
-### Running Tests
-```bash
-pytest tests/
-```
-
-## 📝 Requirements
-
-- Home Assistant 2025.8.3+ (for PKCE OAuth2 support)
-- Python 3.11+
-- Etsy Developer Account (for direct API connection)
-
-## ⚡ Automation Triggers
-
-The integration provides device triggers for automations:
-
-- **New Order**: Triggers when a new order is received
-- **New Review**: Triggers when a new review is posted  
-- **Low Stock**: Triggers when a listing falls below the configured stock threshold
-
-### Example Automation
 ```yaml
 automation:
-  - alias: "Notify on New Etsy Order"
+  - alias: Notify on new Etsy order
     trigger:
       - platform: device
         device_id: YOUR_DEVICE_ID
@@ -164,27 +92,27 @@ automation:
     action:
       - service: notify.mobile_app
         data:
-          message: "You have a new Etsy order!"
+          message: You have a new Etsy order!
 ```
 
-## 🤝 Contributing
+## Requirements
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+- Home Assistant 2025.8.3 or newer (needed for PKCE OAuth2 support)
+- An Etsy seller account with an active shop
+- Either an Etsy developer account (Direct mode) or proxy credentials (Proxy mode)
 
-## 📜 License
+## Acknowledgements
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+PKCE support in Home Assistant's OAuth2 framework comes from [@svrooij's work in core#139509](https://github.com/home-assistant/core/pull/139509), which this integration relies on.
 
-## 🆘 Support
+## Support
 
-- **Issues**: [Report bugs or request features](https://github.com/jmdevita/etsy-shop-ha-integration/issues)
+Bug reports and feature requests go in the [issue tracker](https://github.com/jmdevita/etsy-shop-ha-integration/issues).
 
-## 🙏 Acknowledgments
+## License
 
-- Built on Home Assistant's OAuth2 framework
-- Inspired by the Home Assistant community
-- Leveraged Claude to help review, clean up, and comment on my code.
+MIT. See [LICENSE](LICENSE).
 
 ---
 
-**Note**: This integration is not affiliated with or endorsed by Etsy Inc.
+This integration is not affiliated with or endorsed by Etsy, Inc.
