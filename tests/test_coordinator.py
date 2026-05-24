@@ -23,9 +23,9 @@ async def test_async_setup(hass):
 async def test_etsy_update_coordinator(hass, aioclient_mock):
     """Test the EtsyUpdateCoordinator with mocked API responses."""
     fixtures_path = Path(__file__).parent / "fixtures"
-    with open(fixtures_path / "etsy_shop_data.json") as file:
-        etsy_data = json.load(file)
-    
+    with open(fixtures_path / "etsy_receipts_data.json") as file:
+        receipts_data = json.load(file)
+
     # Mock ConfigEntry
     mock_entry = Mock()
     mock_entry.data = {
@@ -34,62 +34,67 @@ async def test_etsy_update_coordinator(hass, aioclient_mock):
             "access_token": "test_access_token"
         },
         "auth_implementation_client_id": "test_client_id",
-        "auth_implementation": DOMAIN,  # Add auth implementation for OAuth
+        "auth_implementation": DOMAIN,
     }
 
-    # Mock the Etsy API endpoints
     shop_url = "https://openapi.etsy.com/v3/application/shops/56636211"
     listings_url = "https://openapi.etsy.com/v3/application/shops/56636211/listings/active"
-    transactions_url = "https://openapi.etsy.com/v3/application/shops/56636211/transactions"
-    
-    # Mock shop endpoint
+    receipts_url = "https://openapi.etsy.com/v3/application/shops/56636211/receipts"
+    payments_url = (
+        "https://openapi.etsy.com/v3/application/shops/56636211/receipts/5550001/payments"
+    )
+
     aioclient_mock.get(
         shop_url,
-        json={"results": [etsy_data["shop"]]},
+        json={"results": [receipts_data["shop"]]},
         status=200,
     )
-    
-    # Mock listings endpoint
     aioclient_mock.get(
         listings_url,
         json={
-            "results": etsy_data["listings"],
-            "count": etsy_data["listings_count"]
+            "results": receipts_data["listings"],
+            "count": len(receipts_data["listings"]),
         },
         status=200,
     )
-    
-    # Mock transactions endpoint
     aioclient_mock.get(
-        transactions_url,
+        receipts_url,
         json={
-            "results": etsy_data["transactions"],
-            "count": etsy_data["transactions_count"]
+            "results": receipts_data["receipts"],
+            "count": len(receipts_data["receipts"]),
         },
+        status=200,
+    )
+    aioclient_mock.get(
+        payments_url,
+        json={"results": [receipts_data["last_payment"]]},
         status=200,
     )
 
-    # Initialize the coordinator
     coordinator = EtsyUpdateCoordinator(hass, mock_entry)
-    
-    # Mock OAuth session for tests
-    from unittest.mock import AsyncMock
+
     coordinator._oauth_session_initialized = True
     mock_oauth_session = AsyncMock()
     mock_oauth_session.async_ensure_token_valid = AsyncMock()
     mock_oauth_session.token = {"access_token": "test_access_token"}
     coordinator.oauth_session = mock_oauth_session
 
-    # Perform the update
     await coordinator.async_refresh()
 
-    # Assert the data was fetched correctly
+    # Existing assertions preserved — transactions list still 3 line items,
+    # transactions_count still 3. Backward compatibility for EtsyRecentOrders
+    # and EtsyShopStats.
     assert coordinator.last_update_success
     assert coordinator.data['shop']['shop_name'] == "TestEtsyShop"
     assert coordinator.data['listings_count'] == 2
     assert coordinator.data['transactions_count'] == 3
     assert len(coordinator.data['listings']) == 2
     assert len(coordinator.data['transactions']) == 3
+
+    # New keys
+    assert len(coordinator.data['receipts']) == 2
+    assert coordinator.data['receipts'][0]['receipt_id'] == 5550001
+    assert coordinator.data['last_payment']['amount_net']['amount'] == 4675
 
 
 @pytest.mark.asyncio
@@ -191,11 +196,11 @@ async def test_token_refresh_returns_cached_data(hass, aioclient_mock):
     # First successful API call to populate cache
     shop_url = "https://openapi.etsy.com/v3/application/shops/56636211"
     listings_url = "https://openapi.etsy.com/v3/application/shops/56636211/listings/active"
-    transactions_url = "https://openapi.etsy.com/v3/application/shops/56636211/transactions"
-    
+    receipts_url = "https://openapi.etsy.com/v3/application/shops/56636211/receipts"
+
     aioclient_mock.get(shop_url, json={"results": [etsy_data["shop"]]}, status=200)
     aioclient_mock.get(listings_url, json={"results": etsy_data["listings"], "count": 2}, status=200)
-    aioclient_mock.get(transactions_url, json={"results": etsy_data["transactions"], "count": 2}, status=200)
+    aioclient_mock.get(receipts_url, json={"results": [], "count": 0}, status=200)
     
     # Mock the token refresh endpoint to fail
     aioclient_mock.post(
@@ -253,8 +258,8 @@ async def test_rate_limit_returns_cached_data(hass, aioclient_mock):
         json={"results": [], "count": 0}, status=200
     )
     aioclient_mock.get(
-        "https://openapi.etsy.com/v3/application/shops/56636211/transactions",
-        json={"results": [], "count": 0}, status=200  
+        "https://openapi.etsy.com/v3/application/shops/56636211/receipts",
+        json={"results": [], "count": 0}, status=200,
     )
     
     coordinator = EtsyUpdateCoordinator(hass, mock_entry)
@@ -328,3 +333,184 @@ async def test_consecutive_failures_tracking(hass):
         with patch.object(coordinator, '_check_for_changes', new_callable=AsyncMock):
             await coordinator.async_refresh()
     assert coordinator._consecutive_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_payment_fetch_failure_is_graceful(hass, aioclient_mock):
+    """If /payments returns non-200, coordinator still succeeds with
+    last_payment=None and the sensor omits payment-derived fields."""
+    fixtures_path = Path(__file__).parent / "fixtures"
+    with open(fixtures_path / "etsy_receipts_data.json") as file:
+        receipts_data = json.load(file)
+
+    mock_entry = Mock()
+    mock_entry.data = {
+        "shop_id": "56636211",
+        "token": {"access_token": "t"},
+        "auth_implementation_client_id": "test_client_id",
+        "auth_implementation": DOMAIN,
+    }
+
+    base = "https://openapi.etsy.com/v3/application/shops/56636211"
+    aioclient_mock.get(base, json={"results": [receipts_data["shop"]]}, status=200)
+    aioclient_mock.get(
+        f"{base}/listings/active",
+        json={"results": [], "count": 0}, status=200,
+    )
+    aioclient_mock.get(
+        f"{base}/receipts",
+        json={"results": receipts_data["receipts"], "count": 2},
+        status=200,
+    )
+    # /payments returns 404 — Etsy can do this for very-new receipts
+    aioclient_mock.get(
+        f"{base}/receipts/5550001/payments",
+        status=404,
+    )
+
+    coordinator = EtsyUpdateCoordinator(hass, mock_entry)
+    coordinator._oauth_session_initialized = True
+    mock_oauth = AsyncMock()
+    mock_oauth.async_ensure_token_valid = AsyncMock()
+    mock_oauth.token = {"access_token": "t"}
+    coordinator.oauth_session = mock_oauth
+
+    await coordinator.async_refresh()
+
+    assert coordinator.last_update_success
+    assert coordinator.data["last_payment"] is None
+    assert len(coordinator.data["receipts"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_proxy_404_falls_back_to_transactions(hass):
+    """When the proxy returns 404 on /receipts (older proxy version), the
+    coordinator falls back to /transactions and still returns a valid shape."""
+    from custom_components.etsyapp.const import (
+        CONNECTION_MODE_PROXY,
+        CONF_CONNECTION_MODE,
+        CONF_PROXY_URL,
+        CONF_PROXY_API_KEY,
+        CONF_HMAC_SECRET,
+    )
+
+    mock_entry = Mock()
+    mock_entry.data = {
+        CONF_CONNECTION_MODE: CONNECTION_MODE_PROXY,
+        CONF_PROXY_URL: "https://proxy.example",
+        CONF_PROXY_API_KEY: "k",
+        CONF_HMAC_SECRET: "s",
+        "shop_id": "56636211",
+    }
+
+    coordinator = EtsyUpdateCoordinator(hass, mock_entry)
+
+    legacy_txn = {
+        "transaction_id": 1,
+        "receipt_id": 99,
+        "title": "Legacy item",
+        "listing_id": 1,
+        "buyer_user_id": 42,
+        "quantity": 1,
+        "price": {"amount": 1000, "divisor": 100, "currency_code": "USD"},
+        "created_timestamp": 1693843200,
+        "updated_timestamp": 1693843200,
+    }
+
+    with patch.object(
+        coordinator, "_fetch_shop_info_proxy",
+        return_value={"shop_name": "TestShop"},
+    ), patch.object(
+        coordinator, "_fetch_listings_proxy",
+        return_value={"results": [], "count": 0},
+    ), patch.object(
+        coordinator, "_fetch_receipts_proxy",
+        return_value=None,  # Simulates 404 from older proxy
+    ), patch.object(
+        coordinator, "_fetch_transactions_proxy",
+        return_value={"results": [legacy_txn], "count": 1},
+    ) as mock_legacy:
+        data = await coordinator._fetch_via_proxy()
+
+    mock_legacy.assert_called_once()
+    assert data["receipts"] == []
+    assert data["last_payment"] is None
+    assert len(data["transactions"]) == 1
+    assert data["transactions_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_new_order_event_payload_shape(hass):
+    """Pin the etsyapp_new_order event payload shape — outer keys are public
+    API for users' automations and must not change."""
+    fixtures_path = Path(__file__).parent / "fixtures"
+    with open(fixtures_path / "etsy_receipts_data.json") as file:
+        receipts_data = json.load(file)
+
+    mock_entry = Mock()
+    mock_entry.data = {
+        "shop_id": "56636211",
+        "token": {"access_token": "t", "expires_at": time.time() + 3600},
+        "auth_implementation_client_id": "test_client_id",
+    }
+    mock_entry.entry_id = "test_entry"
+    mock_entry.options = {}
+
+    coordinator = EtsyUpdateCoordinator(hass, mock_entry)
+
+    # Seed prior state — pretend we'd previously seen one transaction so the
+    # new-order branch fires (it skips when prev count is 0).
+    coordinator._prev_transactions_count = 1
+    coordinator._prev_receipt_ids = set()
+
+    # Stub the device lookup — _check_for_changes returns early when no device
+    # is registered, but the event-firing logic is what we're testing.
+    fake_device = Mock()
+    fake_device.id = "test_device_id"
+
+    captured = []
+
+    def _capture(event):
+        captured.append(event)
+
+    hass.bus.async_listen(f"{DOMAIN}_new_order", _capture)
+
+    receipts = receipts_data["receipts"]
+    flattened = []
+    for r in receipts:
+        flattened.extend(r.get("transactions") or [])
+
+    data = {
+        "shop": receipts_data["shop"],
+        "listings": [],
+        "transactions": flattened,
+        "receipts": receipts,
+        "last_payment": receipts_data["last_payment"],
+        "transactions_count": len(flattened),
+        "listings_count": 0,
+        "last_updated": "x",
+    }
+
+    with patch(
+        "homeassistant.helpers.device_registry.async_get"
+    ) as mock_dr_get:
+        mock_dr_get.return_value.async_get_device.return_value = fake_device
+        await coordinator._check_for_changes(data)
+    await hass.async_block_till_done()
+
+    assert len(captured) == 1
+    payload = captured[0].data
+    # Outer keys — these are the backward-compat contract.
+    assert set(payload.keys()) == {
+        "device_id",
+        "shop_name",
+        "new_orders",
+        "orders",
+        "receipts",
+    }
+    assert payload["shop_name"] == "TestEtsyShop"
+    assert payload["new_orders"] == len(flattened) - 1
+    # Receipts payload now carries enriched receipt summaries
+    jane = next(r for r in payload["receipts"] if r.get("buyer_name") == "Jane Doe")
+    assert jane["grandtotal"] == 55.0
+    assert jane["receipt_id"] == "5550001"

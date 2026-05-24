@@ -23,6 +23,31 @@ with open(fixtures_path / "etsy_shop_data.json") as file:
 with open(fixtures_path / "etsy_empty_data.json") as file:
     empty_data = json.load(file)
 
+with open(fixtures_path / "etsy_receipts_data.json") as file:
+    receipts_fixture = json.load(file)
+
+
+def _receipts_coordinator_data():
+    """Build a coordinator data dict matching the post-swap shape.
+
+    Mirrors what coordinator._fetch_direct now produces: receipts + a
+    flattened transactions list + last_payment.
+    """
+    receipts = receipts_fixture["receipts"]
+    transactions = []
+    for r in receipts:
+        transactions.extend(r.get("transactions") or [])
+    return {
+        "shop": receipts_fixture["shop"],
+        "listings": receipts_fixture["listings"],
+        "transactions": transactions,
+        "receipts": receipts,
+        "last_payment": receipts_fixture["last_payment"],
+        "listings_count": len(receipts_fixture["listings"]),
+        "transactions_count": len(transactions),
+        "last_updated": "2025-01-01 00:00:00.000000",
+    }
+
 
 @pytest.mark.asyncio
 async def test_etsy_shop_info_sensor():
@@ -221,6 +246,77 @@ async def test_etsy_last_order_sensor():
     titles = [item["title"] for item in items]
     assert "Handmade Leather Wallet" in titles
     assert "Matching Leather Keychain" in titles
+
+
+@pytest.mark.asyncio
+async def test_etsy_last_order_sensor_with_receipts():
+    """EtsyLastOrder pulls buyer name + totals from receipts when present."""
+    mock_coordinator = AsyncMock(spec=EtsyUpdateCoordinator)
+    mock_coordinator.data = _receipts_coordinator_data()
+    mock_coordinator.config_entry = AsyncMock()
+    mock_coordinator.config_entry.entry_id = "test_entry_id"
+    mock_coordinator.config_entry.options = {}
+
+    sensor = EtsyLastOrder(mock_coordinator)
+    sensor.async_write_ha_state = Mock()
+    sensor._handle_coordinator_update()
+
+    attrs = sensor.extra_state_attributes
+
+    # Legacy keys preserved (backward compatibility for existing dashboards)
+    assert attrs["receipt_id"] == "5550001"
+    assert attrs["buyer_user_id"] == "22222222"
+    assert attrs["order_total"] == 49.0  # items-only subtotal — UNCHANGED meaning
+    assert attrs["currency_code"] == "USD"
+    assert attrs["item_count"] == 2
+    assert len(attrs["items"]) == 2
+
+    # New receipt-level fields
+    assert attrs["buyer_name"] == "Jane Doe"
+    assert attrs["subtotal"] == 49.0
+    assert attrs["grandtotal"] == 55.0
+    assert attrs["total_shipping_cost"] == 5.0
+    assert attrs["total_tax_cost"] == 1.0
+    assert attrs["message_from_buyer"] == "Please ship soon!"
+    assert attrs["status"] == "paid"
+    assert attrs["is_paid"] is True
+    assert attrs["is_shipped"] is False
+
+    # Payment-derived figures (the issue's primary ask)
+    assert attrs["amount_gross"] == 55.0
+    assert attrs["amount_fees"] == 8.25
+    assert attrs["amount_net"] == 46.75
+
+
+@pytest.mark.asyncio
+async def test_etsy_last_order_legacy_fallback():
+    """Legacy fallback path: no receipts key, just transactions (proxy skew)."""
+    mock_coordinator = AsyncMock(spec=EtsyUpdateCoordinator)
+    # etsy_data has transactions but no receipts/last_payment — mimics an
+    # older proxy that hasn't been upgraded yet.
+    mock_coordinator.data = etsy_data
+    mock_coordinator.config_entry = AsyncMock()
+    mock_coordinator.config_entry.entry_id = "test_entry_id"
+    mock_coordinator.config_entry.options = {}
+
+    sensor = EtsyLastOrder(mock_coordinator)
+    sensor.async_write_ha_state = Mock()
+    sensor._handle_coordinator_update()
+
+    attrs = sensor.extra_state_attributes
+
+    # Legacy attrs still work — synthesizes a receipt from grouped transactions
+    assert sensor.state == 3
+    assert attrs["receipt_id"] == "5550001"
+    assert attrs["buyer_user_id"] == "22222222"
+    assert attrs["order_total"] == 49.0
+    assert attrs["item_count"] == 2
+    assert attrs["currency_code"] == "USD"
+
+    # New receipt-level fields absent (no source data to populate them)
+    assert "buyer_name" not in attrs
+    assert "grandtotal" not in attrs
+    assert "amount_net" not in attrs
 
 
 @pytest.mark.asyncio

@@ -29,7 +29,7 @@ from .const import (
     CONF_HMAC_SECRET,
 )
 from .hmac_client import HMACClient
-from .utils import build_transaction_detail
+from .utils import build_receipt_summary, build_transaction_detail
 
 _LOGGER = logging.getLogger(__name__)
 type EtsyConfigEntry = ConfigEntry[EtsyUpdateCoordinator]
@@ -47,6 +47,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
         # Track previous state for change detection
         self._prev_transactions_count = 0
         self._prev_review_count = 0
+        self._prev_receipt_ids: set[str] = set()
         # Rate limiting with exponential backoff
         self._retry_count = 0
         self._max_retries = 5
@@ -228,15 +229,36 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             # Now fetch shop data with HMAC signatures
             shop_info = await self._fetch_shop_info_proxy()
             listings_data = await self._fetch_listings_proxy()
-            transactions_data = await self._fetch_transactions_proxy()
-            
+
+            # Try receipts first; fall back to /transactions if the proxy
+            # hasn't been upgraded yet (one-release transition window).
+            receipts_data = await self._fetch_receipts_proxy()
+            if receipts_data is None:
+                _LOGGER.debug("Proxy /receipts unavailable, falling back to /transactions")
+                transactions_data = await self._fetch_transactions_proxy()
+                receipts = []
+                flattened_transactions = transactions_data.get("results", []) or []
+                transactions_count = transactions_data.get(
+                    "count", len(flattened_transactions)
+                )
+                last_payment = None
+            else:
+                receipts = receipts_data.get("results", []) or []
+                flattened_transactions = []
+                for receipt in receipts:
+                    flattened_transactions.extend(receipt.get("transactions") or [])
+                transactions_count = len(flattened_transactions)
+                last_payment = await self._fetch_last_payment_proxy(receipts)
+
             proxy_data = {
-                "shop": shop_info,  # Changed from "shop_info" to "shop" to match sensor expectations
+                "shop": shop_info,
                 "listings": listings_data.get("results", []),
-                "listings_count": listings_data.get("count", 0),  # Changed from "active_listings_count" to "listings_count"
-                "transactions": transactions_data.get("results", []),
-                "transactions_count": transactions_data.get("count", len(transactions_data.get("results", []))),
-                "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),  # Match format with direct mode
+                "listings_count": listings_data.get("count", 0),
+                "transactions": flattened_transactions,
+                "receipts": receipts,
+                "last_payment": last_payment,
+                "transactions_count": transactions_count,
+                "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
             }
             
             # Cache successful data for use during temporary failures
@@ -291,14 +313,14 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
         return await response.json()
     
     async def _fetch_transactions_proxy(self) -> dict:
-        """Fetch transactions via proxy."""
+        """Fetch transactions via proxy (legacy fallback for older proxies)."""
         path = f"/api/v1/shops/{self.shop_id}/transactions"
         headers = self.hmac_client.get_headers_with_signature(
             method="GET",
             path=path,
             api_key=self.proxy_api_key
         )
-        
+
         response = await self.session.get(
             f"{self.proxy_url}{path}",
             headers=headers,
@@ -308,6 +330,76 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("Failed to get transactions: %s", text)
             return {"results": []}
         return await response.json()
+
+    async def _fetch_receipts_proxy(self) -> dict | None:
+        """Fetch receipts via proxy. Returns None if the proxy doesn't support
+        the endpoint yet (404), signalling a fallback to /transactions."""
+        path = f"/api/v1/shops/{self.shop_id}/receipts"
+        headers = self.hmac_client.get_headers_with_signature(
+            method="GET",
+            path=path,
+            api_key=self.proxy_api_key,
+        )
+        params = {
+            "limit": API_FETCH_LIMIT,
+            "was_paid": "true",
+        }
+        response = await self.session.get(
+            f"{self.proxy_url}{path}",
+            headers=headers,
+            params=params,
+        )
+        if response.status == 404:
+            return None
+        if response.status != 200:
+            text = await response.text()
+            _LOGGER.warning("Failed to get receipts: %s", text)
+            return {"results": []}
+        data = await response.json()
+        # Sort client-side — Etsy's /receipts default order isn't documented.
+        results = data.get("results") or []
+        results.sort(
+            key=lambda r: r.get("created_timestamp") or 0,
+            reverse=True,
+        )
+        data["results"] = results
+        return data
+
+    async def _fetch_last_payment_proxy(self, receipts: list[dict]) -> dict | None:
+        """Fetch the payment for the most recent receipt via proxy. Best-effort."""
+        if not receipts:
+            return None
+        receipt_id = receipts[0].get("receipt_id")
+        if not receipt_id:
+            return None
+        path = f"/api/v1/shops/{self.shop_id}/receipts/{receipt_id}/payments"
+        headers = self.hmac_client.get_headers_with_signature(
+            method="GET",
+            path=path,
+            api_key=self.proxy_api_key,
+        )
+        try:
+            response = await self.session.get(
+                f"{self.proxy_url}{path}",
+                headers=headers,
+            )
+            if response.status != 200:
+                _LOGGER.debug(
+                    "Proxy payment fetch skipped for receipt %s (status %s)",
+                    receipt_id,
+                    response.status,
+                )
+                return None
+            data = await response.json()
+            results = data.get("results") if isinstance(data, dict) else data
+            if isinstance(results, list) and results:
+                return results[0]
+            if isinstance(data, dict) and data.get("amount_net"):
+                return data
+            return None
+        except Exception as err:
+            _LOGGER.debug("Proxy payment fetch failed for receipt %s: %s", receipt_id, err)
+            return None
     
     async def _fetch_direct(self) -> dict[str, Any]:
         """Fetch data directly from Etsy API with automatic token refresh."""
@@ -444,29 +536,53 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             listings_response.raise_for_status()
             listings_data = await listings_response.json()
             
-            # Get recent transactions
-            transactions_url = f"{ETSY_API_BASE}/shops/{self.shop_id}/transactions"
-            transactions_params = {"limit": API_FETCH_LIMIT}
-            transactions_response = await self.session.get(
-                transactions_url, headers=headers, params=transactions_params
+            # Get recent receipts (replaces /transactions — receipts embed their
+            # transactions array and additionally carry buyer name + order totals).
+            # Etsy's /receipts endpoint doesn't accept sort_on/sort_order params
+            # and doesn't document its default order, so we sort client-side
+            # to guarantee receipts[0] is the most recent.
+            receipts_url = f"{ETSY_API_BASE}/shops/{self.shop_id}/receipts"
+            receipts_params = {
+                "limit": API_FETCH_LIMIT,
+                "was_paid": "true",
+            }
+            receipts_response = await self.session.get(
+                receipts_url, headers=headers, params=receipts_params
             )
-            
-            # Check for rate limiting  
-            if transactions_response.status == 429:
-                retry_after = transactions_response.headers.get("Retry-After", "60")
-                _LOGGER.warning("Etsy API rate limit hit on transactions. Retry after %s seconds", retry_after)
+
+            if receipts_response.status == 429:
+                retry_after = receipts_response.headers.get("Retry-After", "60")
+                _LOGGER.warning("Etsy API rate limit hit on receipts. Retry after %s seconds", retry_after)
                 raise UpdateFailed(f"Rate limit exceeded (429). Retry after {retry_after} seconds")
-            
-            transactions_response.raise_for_status()
-            transactions_data = await transactions_response.json()
-            
+
+            receipts_response.raise_for_status()
+            receipts_data = await receipts_response.json()
+            receipts = receipts_data.get("results", []) or []
+            receipts.sort(
+                key=lambda r: r.get("created_timestamp") or 0,
+                reverse=True,
+            )
+
+            # Flatten transactions out of receipts to preserve data["transactions"]
+            # for EtsyRecentOrders, EtsyShopStats and services.py.
+            flattened_transactions = []
+            for receipt in receipts:
+                flattened_transactions.extend(receipt.get("transactions") or [])
+
+            # Best-effort fetch of payment for the most recent receipt only —
+            # /payments is one call per receipt, and only EtsyLastOrder
+            # surfaces amount_net.
+            last_payment = await self._fetch_last_payment_direct(receipts, headers)
+
             # Combine data
             combined_data = {
                 "shop": shop_data,  # Already extracted above
                 "listings": listings_data.get("results", []),
-                "transactions": transactions_data.get("results", []),
+                "transactions": flattened_transactions,
+                "receipts": receipts,
+                "last_payment": last_payment,
                 "listings_count": listings_data.get("count", 0),
-                "transactions_count": transactions_data.get("count", 0),
+                "transactions_count": len(flattened_transactions),
                 "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
             }
             
@@ -480,7 +596,45 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             raise
         except Exception as err:
             raise UpdateFailed(f"Error fetching data from Etsy API: {err}") from err
-    
+
+    async def _fetch_last_payment_direct(
+        self, receipts: list[dict], headers: dict
+    ) -> dict | None:
+        """Fetch the payment for the most recent receipt. Best-effort.
+
+        amount_net (the seller's net payout after Etsy fees) lives on the
+        payment object, not the receipt. We only fetch it for the latest
+        receipt to keep API usage in check — EtsyLastOrder is the only sensor
+        that surfaces net payout.
+        """
+        if not receipts:
+            return None
+        receipt_id = receipts[0].get("receipt_id")
+        if not receipt_id:
+            return None
+        try:
+            url = f"{ETSY_API_BASE}/shops/{self.shop_id}/receipts/{receipt_id}/payments"
+            response = await self.session.get(url, headers=headers)
+            if response.status != 200:
+                _LOGGER.debug(
+                    "Skipping payment fetch for receipt %s (status %s)",
+                    receipt_id,
+                    response.status,
+                )
+                return None
+            data = await response.json()
+            # Endpoint returns a list (a receipt can have multiple payments,
+            # one per payment method); take the first.
+            results = data.get("results") if isinstance(data, dict) else data
+            if isinstance(results, list) and results:
+                return results[0]
+            if isinstance(data, dict) and data.get("amount_net"):
+                return data
+            return None
+        except Exception as err:
+            _LOGGER.debug("Payment fetch failed for receipt %s: %s", receipt_id, err)
+            return None
+
     async def _manual_token_refresh(self) -> str | None:
         """Manually refresh the OAuth token using the refresh token."""
         try:
@@ -559,33 +713,53 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
         device_id = device.id
         shop = data.get("shop", {})
         
-        # Check for new orders (transactions)
+        # Check for new orders. `new_orders` count is preserved as a delta of
+        # transaction line items (legacy behavior — automations may template
+        # off it). The richer `receipts` payload is built from real receipt
+        # data when available, diffed by receipt_id.
         current_transactions_count = data.get("transactions_count", 0)
+        current_receipts = data.get("receipts") or []
+        current_receipt_ids = {
+            str(r.get("receipt_id")) for r in current_receipts if r.get("receipt_id")
+        }
+
         if current_transactions_count > self._prev_transactions_count and self._prev_transactions_count > 0:
             new_order_count = current_transactions_count - self._prev_transactions_count
-            _LOGGER.debug("New order detected! Count increased from %s to %s", self._prev_transactions_count, current_transactions_count)
+            _LOGGER.debug(
+                "New order detected! Transaction count %s -> %s",
+                self._prev_transactions_count,
+                current_transactions_count,
+            )
 
-            # Build detailed transaction data for the new orders
             transactions = data.get("transactions", [])
-            new_transactions = []
-            receipt_groups = defaultdict(list)
-            for t in transactions[:new_order_count]:
-                detail = build_transaction_detail(t)
-                new_transactions.append(detail)
-                # Group by receipt_id for per-order access
-                receipt_id = t.get("receipt_id")
-                key = str(receipt_id) if receipt_id else str(t.get("transaction_id", ""))
-                receipt_groups[key].append(detail)
-
-            receipts = [
-                {
-                    "receipt_id": rid,
-                    "buyer_user_id": items[0].get("buyer_user_id"),
-                    "item_count": len(items),
-                    "items": items,
-                }
-                for rid, items in receipt_groups.items()
+            new_transactions = [
+                build_transaction_detail(t) for t in transactions[:new_order_count]
             ]
+
+            # Build receipts payload — prefer real receipts diffed by ID,
+            # fall back to client-side grouping when receipt data isn't
+            # present (legacy proxy path).
+            new_receipt_ids = current_receipt_ids - self._prev_receipt_ids
+            if current_receipts and new_receipt_ids:
+                new_receipts = [
+                    build_receipt_summary(r)
+                    for r in current_receipts
+                    if str(r.get("receipt_id")) in new_receipt_ids
+                ]
+            else:
+                receipt_groups: dict[str, list[dict]] = defaultdict(list)
+                for detail in new_transactions:
+                    key = detail.get("receipt_id") or detail.get("transaction_id") or ""
+                    receipt_groups[key].append(detail)
+                new_receipts = [
+                    {
+                        "receipt_id": rid,
+                        "buyer_user_id": items[0].get("buyer_user_id"),
+                        "item_count": len(items),
+                        "items": items,
+                    }
+                    for rid, items in receipt_groups.items()
+                ]
 
             self._hass.bus.async_fire(
                 f"{DOMAIN}_new_order",
@@ -594,10 +768,11 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                     "shop_name": shop.get("shop_name"),
                     "new_orders": new_order_count,
                     "orders": new_transactions,
-                    "receipts": receipts,
+                    "receipts": new_receipts,
                 }
             )
         self._prev_transactions_count = current_transactions_count
+        self._prev_receipt_ids = current_receipt_ids
         
         # Check for new reviews
         current_review_count = shop.get("review_count", 0)

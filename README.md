@@ -55,7 +55,7 @@ Each integration entry is named `ShopName (ShopID) - Direct` or `ShopName (ShopI
 | Etsy Shop Info | Shop name | Shop ID, currency, creation date, announcement, sale message |
 | Etsy Active Listings | Active listing count | Recent listings, total views, total favorites |
 | Etsy Recent Orders | Recent transaction count | Transaction details, recent revenue, buyer info |
-| Etsy Last Order | Last order quantity | Item title, price, variations, buyer info |
+| Etsy Last Order | Last order item quantity | Buyer name, order totals (subtotal, grandtotal, shipping, tax), net payout (`amount_net`) after Etsy fees, per-item breakdown, buyer message, gift info, ship/paid status |
 | Etsy Shop Statistics | Total sales count | Active listings, views, favorites, revenue, ratings |
 
 ## Sample dashboard cards
@@ -104,8 +104,16 @@ automation:
     action:
       - service: notify.mobile_app
         data:
-          message: You have a new Etsy order!
+          message: >-
+            New order from {{ trigger.event.data.receipts[0].buyer_name }} —
+            {{ trigger.event.data.receipts[0].currency_code }}{{ trigger.event.data.receipts[0].grandtotal }}
 ```
+
+The `receipts[]` entries in the `new_order` event carry the same fields as the `etsy_last_order` sensor attributes (buyer name, totals, items, message from buyer, etc.).
+
+### Proxy mode
+
+Proxy mode requires proxy version **1.1.0 or newer** for the receipts/payments endpoints. Older proxies fall back to the transactions-only path automatically; buyer name and order totals will not be populated until the proxy is upgraded.
 
 ## Requirements
 

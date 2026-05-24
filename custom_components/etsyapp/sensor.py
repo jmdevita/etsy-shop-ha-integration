@@ -22,7 +22,7 @@ from .const import (
     EMPTY_ATTRIBUTES,
 )
 from .coordinator import EtsyConfigEntry, EtsyUpdateCoordinator
-from .utils import build_transaction_detail
+from .utils import build_receipt_summary, build_transaction_detail
 
 PLATFORMS = [Platform.SENSOR]
 _LOGGER = logging.getLogger(__name__)
@@ -305,82 +305,66 @@ class EtsyLastOrder(CoordinatorEntity, SensorEntity):
         etsy_data = self.coordinator.data
 
         if not etsy_data:
-            self._attr_state = 0
-            self._attr_icon = "mdi:cart-off"
-            self._hass_custom_attributes = {}
-            self.async_write_ha_state()
+            self._set_empty()
             return
 
-        transactions = etsy_data.get("transactions", [])
-        if not transactions:
-            self._attr_state = 0
-            self._attr_icon = "mdi:cart-off"
-            self._hass_custom_attributes = {}
-            self.async_write_ha_state()
-            return
-
-        # Group transactions by receipt_id to identify items from the same order
-        grouped = defaultdict(list)
-        for txn in transactions:
-            receipt_id = txn.get("receipt_id")
-            if receipt_id:
-                grouped[str(receipt_id)].append(txn)
-            else:
-                # Fallback: treat each transaction as its own order
-                grouped[str(txn.get("transaction_id", ""))].append(txn)
-
-        # Find the most recent order group by max created_timestamp
-        most_recent_receipt = None
-        most_recent_timestamp = 0
-        for receipt_id, txns in grouped.items():
-            group_timestamp = max(
-                t.get("created_timestamp", 0) for t in txns
+        receipts = etsy_data.get("receipts") or []
+        if receipts:
+            last_payment = etsy_data.get("last_payment")
+            summary = build_receipt_summary(receipts[0], last_payment)
+        else:
+            # Fallback for proxy-skew case: synthesize a receipt by grouping
+            # transactions on receipt_id. No payment data available in this
+            # path, and receipt-level totals are missing — only items_subtotal
+            # and the legacy fields will be populated.
+            summary = self._synthesize_from_transactions(
+                etsy_data.get("transactions") or []
             )
-            if group_timestamp > most_recent_timestamp:
-                most_recent_timestamp = group_timestamp
-                most_recent_receipt = receipt_id
+            if summary is None:
+                self._set_empty()
+                return
 
-        if not most_recent_receipt:
-            self._attr_state = 0
-            self._attr_icon = "mdi:cart-off"
-            self._hass_custom_attributes = {}
-            self.async_write_ha_state()
+        if not summary.get("items"):
+            self._set_empty()
             return
 
-        order_transactions = grouped[most_recent_receipt]
-
-        # Build per-item details
-        items = []
-        order_total = 0
-        total_quantity = 0
-        for txn in order_transactions:
-            detail = build_transaction_detail(txn)
-            items.append(detail)
-            qty = detail.get("quantity") or 1
-            order_total += detail["price_amount"] * qty
-            total_quantity += qty
-
-        # Get order-level info from the first transaction
-        first_item = items[0]
-        order_date = min(
-            (item["created_date"] for item in items if item.get("created_date")),
-            default=None,
+        self._attr_state = sum(
+            (item.get("quantity") or 1) for item in summary["items"]
         )
-
-        self._attr_state = total_quantity
         self._attr_icon = "mdi:cart"
-
-        self._hass_custom_attributes = {
-            "receipt_id": most_recent_receipt,
-            "buyer_user_id": first_item.get("buyer_user_id"),
-            "order_total": round(order_total, 2),
-            "currency_code": first_item.get("price_currency", "USD"),
-            "order_date": order_date,
-            "item_count": len(items),
-            "items": items,
-        }
-
+        self._hass_custom_attributes = summary
         self.async_write_ha_state()
+
+    def _set_empty(self) -> None:
+        self._attr_state = 0
+        self._attr_icon = "mdi:cart-off"
+        self._hass_custom_attributes = {}
+        self.async_write_ha_state()
+
+    @staticmethod
+    def _synthesize_from_transactions(transactions: list[dict]) -> dict | None:
+        """Build a minimal receipt-shaped summary from a transactions list."""
+        if not transactions:
+            return None
+        grouped: dict[str, list[dict]] = defaultdict(list)
+        for txn in transactions:
+            key = str(txn.get("receipt_id") or txn.get("transaction_id", ""))
+            grouped[key].append(txn)
+
+        if not grouped:
+            return None
+        most_recent_id = max(
+            grouped,
+            key=lambda k: max(
+                (t.get("created_timestamp", 0) for t in grouped[k]), default=0
+            ),
+        )
+        synthetic_receipt = {
+            "receipt_id": most_recent_id,
+            "buyer_user_id": grouped[most_recent_id][0].get("buyer_user_id"),
+            "transactions": grouped[most_recent_id],
+        }
+        return build_receipt_summary(synthetic_receipt)
 
 
 class EtsyShopStats(CoordinatorEntity, SensorEntity):
