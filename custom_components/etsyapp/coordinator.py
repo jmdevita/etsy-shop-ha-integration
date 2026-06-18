@@ -424,14 +424,18 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                 self.oauth_session = None
                 self._oauth_session_initialized = True
 
-        # Get client credentials from entry for API key header
+        # Get client credentials from entry needed for HTTP header
         client_id = self.config_entry.data.get("auth_implementation_client_id")
+        client_secret = self.config_entry.data.get("client_secret")
+
         if not client_id:
             raise UpdateFailed("Missing client_id for API authentication")
 
-        client_secret = self.config_entry.data.get("client_secret")
+        # Trigger re-authorization if client secret is missing
         if not client_secret:
-            raise UpdateFailed("Missing client_id for API authentication")
+            _LOGGER.error("Missing client_secret for API authentication")
+            self.config_entry.async_start_reauth(self._hass)
+            raise ConfigEntryAuthFailed("Missing client secret. Please re-authenticate.")
 
         # Get access token with refresh handling
         token = None
