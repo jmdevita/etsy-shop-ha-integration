@@ -13,7 +13,7 @@ import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 
 from .const import (
-    DOMAIN, 
+    DOMAIN,
     ETSY_API_BASE,
     CONNECTION_MODE_DIRECT,
     CONNECTION_MODE_PROXY,
@@ -64,7 +64,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
     DOMAIN = DOMAIN
     VERSION = 1
     MINOR_VERSION = 1
-    
+
     @staticmethod
     @config_entries.callback
     def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> config_entries.OptionsFlow:
@@ -90,7 +90,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
     ) -> FlowResult:
         """Handle a flow initialized by the user."""
         return await self.async_step_connection_mode(user_input)
-    
+
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -158,37 +158,37 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                     "shop_name": entry.data.get("shop_name", "your shop"),
                 }
             )
-    
+
     async def async_step_reauth(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle re-authentication for missing credentials."""
         self.reauth_entry = self.hass.config_entries.async_get_entry(
             self.context.get("entry_id")
         )
-        
+
         # Check if user_input has the required fields (not just if it exists)
         if user_input is not None and CONF_CLIENT_SECRET in user_input:
             # Store the new credentials
             new_data = dict(self.reauth_entry.data)
             new_data["client_secret"] = user_input[CONF_CLIENT_SECRET]
-            
+
             # Also update the auth_implementation_client_id if provided
             if CONF_CLIENT_ID in user_input:
                 new_data["auth_implementation_client_id"] = user_input[CONF_CLIENT_ID]
-            
+
             # Update the config entry
             self.hass.config_entries.async_update_entry(
                 self.reauth_entry,
                 data=new_data
             )
-            
+
             # Reload the integration
             await self.hass.config_entries.async_reload(self.reauth_entry.entry_id)
-            
+
             return self.async_abort(reason="reauth_successful")
-        
+
         # Pre-fill client_id if available
         client_id = self.reauth_entry.data.get("auth_implementation_client_id", "")
-        
+
         return self.async_show_form(
             step_id="reauth",
             data_schema=vol.Schema({
@@ -199,7 +199,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 "instructions": "Your Etsy credentials are missing or incomplete. Please re-enter them from your Etsy Developer Dashboard."
             }
         )
-    
+
     async def async_step_connection_mode(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -212,7 +212,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 return await self.async_step_proxy_config()
             else:
                 return await self.async_step_direct_credentials()
-        
+
         return self.async_show_form(
             step_id="connection_mode",
             data_schema=vol.Schema({
@@ -226,7 +226,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 "proxy_desc": "Use the proxy service to connect without an Etsy developer account (Beta)"
             }
         )
-    
+
     async def async_step_direct_credentials(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -237,10 +237,10 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 CONF_CLIENT_ID: user_input[CONF_CLIENT_ID],
                 CONF_CLIENT_SECRET: user_input[CONF_CLIENT_SECRET],
             }
-            
+
             # Create and register the OAuth2 implementation
             from homeassistant.helpers import config_entry_oauth2_flow
-            
+
             # Create implementation with user's credentials (using our PKCE-enabled implementation)
             implementation = EtsyOAuth2Implementation(
                 self.hass,
@@ -248,20 +248,20 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 user_input[CONF_CLIENT_ID],
                 user_input[CONF_CLIENT_SECRET],
             )
-            
+
             # Register it as an available implementation
             config_entry_oauth2_flow.async_register_implementation(
                 self.hass,
                 DOMAIN,
                 implementation
             )
-            
+
             # Set this as the active implementation for this flow
             self.flow_impl = implementation
-            
+
             # Continue with OAuth flow
             return await self.async_step_pick_implementation(user_input={"implementation": DOMAIN})
-        
+
         return self.async_show_form(
             step_id="direct_credentials",
             data_schema=vol.Schema({
@@ -272,13 +272,13 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 "instructions": "Enter your Etsy API credentials from the Etsy Developer Dashboard"
             }
         )
-    
+
     async def async_step_proxy_config(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Handle proxy configuration."""
         errors = {}
-        
+
         if user_input is not None:
             # Validate proxy connection with HMAC if provided
             valid = await self._validate_proxy_connection(
@@ -286,13 +286,13 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 user_input[CONF_PROXY_API_KEY],
                 user_input.get(CONF_HMAC_SECRET)
             )
-            
+
             if valid:
                 # Clean up the URL before storing
                 proxy_url = user_input[CONF_PROXY_URL].rstrip('/')
                 if proxy_url.endswith('/api/v1'):
                     proxy_url = proxy_url[:-7]  # Remove '/api/v1'
-                    
+
                 # Store proxy config and proceed to shop selection
                 self.proxy_config = {
                     CONF_CONNECTION_MODE: CONNECTION_MODE_PROXY,
@@ -303,7 +303,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 return await self.async_step_proxy_shop_selection()
             else:
                 errors["base"] = "invalid_proxy"
-        
+
         return self.async_show_form(
             step_id="proxy_config",
             data_schema=vol.Schema({
@@ -316,21 +316,21 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 "instructions": "Enter your proxy service URL, API key, and HMAC secret for secure communication"
             }
         )
-    
+
     async def _validate_proxy_connection(
         self, proxy_url: str, api_key: str, hmac_secret: str | None = None
     ) -> bool:
         """Validate proxy connection with HMAC authentication if secret provided."""
         try:
             session = async_get_clientsession(self.hass)
-            
+
             # Clean up the URL - remove trailing slash and /api/v1 if present
             proxy_url = proxy_url.rstrip('/')
             if proxy_url.endswith('/api/v1'):
                 proxy_url = proxy_url[:-7]  # Remove '/api/v1'
-            
+
             path = "/health"
-            
+
             if hmac_secret:
                 # Use HMAC authentication
                 from .hmac_client import HMACClient
@@ -343,14 +343,14 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
             else:
                 # Fallback to simple bearer token (will fail on secure proxy)
                 headers = {"Authorization": f"Bearer {api_key}"}
-            
+
             # Test the health endpoint
             response = await session.get(
                 f"{proxy_url}{path}",
                 headers=headers,
                 timeout=10
             )
-            
+
             return response.status == 200
         except Exception as e:
             _LOGGER.error(f"Proxy validation failed: {e}")
@@ -362,7 +362,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
         """Handle shop selection step."""
         if user_input is not None:
             self._shop_id = user_input["shop_id"]
-            
+
             # Validate shop access
             if await self._validate_shop_access(self._shop_id):
                 return await self._create_config_entry()
@@ -377,10 +377,10 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
 
         # Get available shops from API
         shops = await self._get_user_shops()
-        
+
         if not shops:
             return self.async_abort(reason="no_shops_found")
-        
+
         if len(shops) == 1:
             # Only one shop, use it automatically
             self._shop_id = str(shops[0]["shop_id"])
@@ -389,7 +389,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
 
         # Multiple shops, let user choose
         shop_options = {str(shop["shop_id"]): shop["shop_name"] for shop in shops}
-        
+
         return self.async_show_form(
             step_id="shop_selection",
             data_schema=vol.Schema({
@@ -406,11 +406,11 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
         """Handle shop selection for proxy mode."""
         if user_input is not None:
             shop_id = user_input["shop_id"]
-            
+
             # Get shop name from our stored shop options
             shops = await self._get_proxy_shops()
             shop_name = next((shop.get("shop_name", shop.get("title", f"Shop {shop_id}")) for shop in shops if str(shop["shop_id"]) == shop_id), f"Shop {shop_id}")
-            
+
             # Create entry with proxy config and selected shop
             return self.async_create_entry(
                 title=f"{shop_name} ({shop_id}) - Proxy",
@@ -420,13 +420,13 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                     "shop_name": shop_name,
                 }
             )
-        
+
         # Get available shops from proxy
         shops = await self._get_proxy_shops()
-        
+
         if not shops:
             return self.async_abort(reason="no_shops_found")
-        
+
         if len(shops) == 1:
             # Only one shop, use it automatically
             shop_name = shops[0].get("shop_name", shops[0].get("title", f"Shop {shops[0]['shop_id']}"))
@@ -439,10 +439,10 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                     "shop_name": shop_name,
                 }
             )
-        
+
         # Multiple shops, let user choose
         shop_options = {str(shop["shop_id"]): shop.get("shop_name", shop.get("title", f"Shop {shop['shop_id']}")) for shop in shops}
-        
+
         return self.async_show_form(
             step_id="proxy_shop_selection",
             data_schema=vol.Schema({
@@ -452,15 +452,15 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 "num_shops": str(len(shops)),
             },
         )
-    
+
     async def _get_proxy_shops(self) -> list[dict[str, Any]]:
         """Get shops from proxy service."""
         try:
             session = async_get_clientsession(self.hass)
-            
+
             path = "/api/v1/shops"
             hmac_secret = self.proxy_config.get(CONF_HMAC_SECRET)
-            
+
             if hmac_secret:
                 # Use HMAC authentication
                 from .hmac_client import HMACClient
@@ -473,19 +473,19 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
             else:
                 # This will fail on secure proxy
                 headers = {"Authorization": f"Bearer {self.proxy_config[CONF_PROXY_API_KEY]}"}
-            
+
             response = await session.get(
                 f"{self.proxy_config[CONF_PROXY_URL]}{path}",
                 headers=headers,
                 timeout=10
             )
-            
+
             if response.status == 200:
                 return await response.json()
             else:
                 _LOGGER.error(f"Failed to get shops from proxy: {response.status}")
                 return []
-                
+
         except Exception as e:
             _LOGGER.error(f"Error getting shops from proxy: {e}")
             return []
@@ -500,24 +500,27 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
         """Get list of shops for the authenticated user."""
         try:
             session = async_get_clientsession(self.hass)
-            
+
             # Extract user_id from access token (format: user_id.scope.token)
             access_token = self.oauth_data.get("token", {}).get("access_token", "")
             _LOGGER.debug("Extracting user_id from OAuth token")
-            
+
             if '.' in access_token:
                 user_id = access_token.split('.')[0]
                 _LOGGER.debug("Extracted user_id %s from access token", user_id)
             else:
                 _LOGGER.error(f"Unable to extract user_id from access token. Token format: {access_token[:20]}...")
                 return []
-            
+
             # Get client_id from various sources
             client_id = None
+            client_secret = None
             if hasattr(self, 'flow_impl') and self.flow_impl:
                 client_id = self.flow_impl.client_id
+                client_secret = self.flow_impl.client_secret
             elif self.etsy_credentials:
                 client_id = self.etsy_credentials.get(CONF_CLIENT_ID)
+                client_secret = self.etsy_credentials.get(CONF_CLIENT_SECRET)
             else:
                 # Try to get from registered implementations
                 from homeassistant.helpers import config_entry_oauth2_flow
@@ -528,37 +531,42 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                     # Get the first implementation
                     impl = next(iter(implementations.values()))
                     client_id = impl.client_id
-            
+                    client_secret = impl.client_secret
+
             if not client_id:
                 _LOGGER.error("Unable to get client_id for API request")
                 return []
-                
+
+            if not client_secret:
+                _LOGGER.error("Unable to get client_secret for API request")
+                return []
+
             headers = {
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "x-api-key": client_id,
+                "x-api-key": f"{client_id}:{client_secret}",
                 "Authorization": f"Bearer {access_token}",
             }
-            
+
             # Get user's shops directly using extracted user_id
             shops_url = f"{ETSY_API_BASE}/users/{user_id}/shops"
             _LOGGER.debug("Fetching shops from Etsy API")
-            
+
             shops_response = await session.get(shops_url, headers=headers)
-            
+
             if shops_response.status != 200:
                 error_text = await shops_response.text()
                 _LOGGER.error(f"Failed to fetch shops. Status: {shops_response.status}, Error: {error_text}")
                 return []
-                
+
             shops_data = await shops_response.json()
             _LOGGER.debug("Processing shops response from Etsy API")
-            
+
             # The API can return data in different formats:
             # 1. Single shop: {"shop_id": 123, "shop_name": "...", ...}
             # 2. Multiple shops: {"count": 2, "results": [{shop1}, {shop2}]}
             # 3. Empty/No shops: {"count": 0, "results": []}
-            
+
             if isinstance(shops_data, dict):
                 if "results" in shops_data:
                     # Standard v3 format with results array
@@ -575,9 +583,9 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 # In case API returns a direct array of shops
                 _LOGGER.debug("API returned direct array of %s shop(s)", len(shops_data))
                 return shops_data
-            
+
             return []
-            
+
         except Exception as e:
             _LOGGER.error("Error fetching user shops: %s", e)
             return []
@@ -589,21 +597,21 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
             headers = {
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "x-api-key": self.flow_impl.client_id,
+                "x-api-key": f"{self.flow_impl.client_id}:{self.flow_impl.client_secret}",
                 "Authorization": f"Bearer {self.access_token}",
             }
-            
+
             response = await session.get(
                 f"{ETSY_API_BASE}/shops/{shop_id}", headers=headers
             )
-            
+
             if response.status == 200:
                 shop_data = await response.json()
                 if shop_data.get("results"):
                     self._shop_name = shop_data["results"][0]["shop_name"]
                     return True
             return False
-            
+
         except Exception as e:
             _LOGGER.error("Error validating shop access: %s", e)
             return False
@@ -660,7 +668,7 @@ class EtsyOptionsFlow(config_entries.OptionsFlow):
                     default=current_options.get("listings_display_limit", 5),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=25)),
                 vol.Optional(
-                    "transactions_display_limit", 
+                    "transactions_display_limit",
                     default=current_options.get("transactions_display_limit", 10),
                 ): vol.All(vol.Coerce(int), vol.Range(min=1, max=25)),
                 vol.Optional(
