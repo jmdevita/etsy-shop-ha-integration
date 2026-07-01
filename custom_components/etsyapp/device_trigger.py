@@ -94,18 +94,20 @@ async def async_attach_trigger(
     device_id = config[CONF_DEVICE_ID]
     trigger_type = config[CONF_TYPE]
     
-    # Build the event type based on our domain and trigger type
+    # Map the device trigger onto our custom bus event and let the event
+    # trigger platform do the listening. TRIGGER_SCHEMA normalizes the config
+    # (e.g. event_type -> templated list) so async_attach_trigger gets it right.
     event_type = f"{DOMAIN}_{trigger_type}"
-    
-    # Use Home Assistant's event trigger to listen for our custom events
-    event_config = {
-        event_trigger.CONF_PLATFORM: "event",
-        event_trigger.CONF_EVENT_TYPE: event_type,
-        event_trigger.CONF_EVENT_DATA: {
-            CONF_DEVICE_ID: device_id,
-        },
-    }
-    
+    event_config = event_trigger.TRIGGER_SCHEMA(
+        {
+            event_trigger.CONF_PLATFORM: "event",
+            event_trigger.CONF_EVENT_TYPE: event_type,
+            event_trigger.CONF_EVENT_DATA: {
+                CONF_DEVICE_ID: device_id,
+            },
+        }
+    )
+
     # Attach the event trigger
     return await event_trigger.async_attach_trigger(
         hass, event_config, action, trigger_info, platform_type="device"
