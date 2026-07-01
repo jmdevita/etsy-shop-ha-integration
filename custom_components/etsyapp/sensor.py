@@ -22,7 +22,7 @@ from .const import (
     EMPTY_ATTRIBUTES,
 )
 from .coordinator import EtsyConfigEntry, EtsyUpdateCoordinator
-from .utils import build_receipt_summary, build_transaction_detail
+from .utils import build_pending_summary, build_receipt_summary, build_transaction_detail
 
 PLATFORMS = [Platform.SENSOR]
 _LOGGER = logging.getLogger(__name__)
@@ -42,6 +42,7 @@ async def async_setup_entry(
             EtsyActiveListings(coordinator),
             EtsyRecentOrders(coordinator),
             EtsyLastOrder(coordinator),
+            EtsyPendingOrders(coordinator),
             EtsyShopStats(coordinator),
         ],
         update_before_add=True,
@@ -365,6 +366,99 @@ class EtsyLastOrder(CoordinatorEntity, SensorEntity):
             "transactions": grouped[most_recent_id],
         }
         return build_receipt_summary(synthetic_receipt)
+
+
+class EtsyPendingOrders(CoordinatorEntity, SensorEntity):
+    """Sensor showing open (paid but unshipped) orders.
+
+    State is the count of pending orders; each order's detail — same shape as
+    sensor.etsy_last_order — is exposed in the ``pending`` attribute so a
+    dashboard can render one card per order via templating (issue #24).
+    """
+
+    def __init__(self, coordinator: EtsyUpdateCoordinator) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._hass_custom_attributes = {"pending": []}
+        self._attr_name = "Etsy Pending Orders"
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_pending_orders"
+        self._globalid = "etsy_pending_orders"
+        self._attr_icon = "mdi:package-variant"
+        self._attr_state = 0
+        # Associate with device
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, coordinator.config_entry.entry_id)},
+        }
+
+    @property
+    def state(self) -> Any:
+        """Return the current state of the sensor."""
+        return self._attr_state
+
+    @property
+    def extra_state_attributes(self):
+        """Return the state attributes of the sensor."""
+        return self._hass_custom_attributes
+
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        etsy_data = self.coordinator.data
+        pending = (etsy_data or {}).get("pending_receipts") or []
+
+        if not pending:
+            self._set_empty()
+            return
+
+        # Newest first, consistent with the other order sensors.
+        pending = sorted(
+            pending, key=lambda r: r.get("created_timestamp") or 0, reverse=True
+        )
+        summaries = [build_pending_summary(receipt) for receipt in pending]
+
+        total_quantity = sum(
+            (item.get("quantity") or 1)
+            for summary in summaries
+            for item in summary.get("items", [])
+        )
+        oldest_ts = min(
+            (r.get("created_timestamp") for r in pending if r.get("created_timestamp")),
+            default=None,
+        )
+        oldest_order_date = None
+        if oldest_ts:
+            try:
+                oldest_order_date = datetime.fromtimestamp(int(oldest_ts)).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            except (ValueError, TypeError, OSError):
+                oldest_order_date = None
+
+        self._attr_state = len(summaries)
+        self._attr_icon = "mdi:package-variant-closed"
+        self._hass_custom_attributes = {
+            "pending_count": len(summaries),
+            "pending": summaries,
+            "total_quantity": total_quantity,
+            "oldest_order_date": oldest_order_date,
+            "currency_code": summaries[0].get("currency_code", "USD"),
+            "last_updated": (etsy_data or {}).get("last_updated"),
+        }
+        self.async_write_ha_state()
+
+    def _set_empty(self) -> None:
+        # Same attribute keys as the populated case, for stable templates.
+        etsy_data = self.coordinator.data or {}
+        self._attr_state = 0
+        self._attr_icon = "mdi:package-variant"
+        self._hass_custom_attributes = {
+            "pending_count": 0,
+            "pending": [],
+            "total_quantity": 0,
+            "oldest_order_date": None,
+            "currency_code": (etsy_data.get("shop") or {}).get("currency_code", "USD"),
+            "last_updated": etsy_data.get("last_updated"),
+        }
+        self.async_write_ha_state()
 
 
 class EtsyShopStats(CoordinatorEntity, SensorEntity):
