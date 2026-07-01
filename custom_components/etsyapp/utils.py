@@ -165,3 +165,9 @@ def build_receipt_summary(receipt: dict, payment: dict | None = None) -> dict:
             summary["amount_net"] = net["amount"]
 
     return summary
+
+
+def build_pending_summary(receipt: dict) -> dict:
+    """Per-order attribute dict for a pending receipt — same shape as
+    sensor.etsy_last_order (issue #24)."""
+    return build_receipt_summary(receipt)
