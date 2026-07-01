@@ -144,6 +144,7 @@ async def test_direct_refresh_populates_pending(hass, aioclient_mock):
         "token": {"access_token": "test_access_token"},
         "auth_implementation_client_id": "test_client_id",
         "auth_implementation": "etsyapp",
+        "client_secret": "test_secret",
     }
     base = "https://openapi.etsy.com/v3/application/shops/56636211"
     aioclient_mock.get(base, json={"results": [receipts_fixture["shop"]]}, status=200)
