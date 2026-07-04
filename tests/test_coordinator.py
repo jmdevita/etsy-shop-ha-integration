@@ -517,3 +517,54 @@ async def test_new_order_event_payload_shape(hass):
     jane = next(r for r in payload["receipts"] if r.get("buyer_name") == "Jane Doe")
     assert jane["grandtotal"] == 55.0
     assert jane["receipt_id"] == "5550001"
+
+
+async def test_low_stock_threshold_zero_disables_alerts(hass):
+    """stock_threshold=0 means no low-stock events, even for quantity-1
+    listings (issue #31 — one-of-a-kind items are intentionally at 1)."""
+
+    def _make_coordinator(threshold):
+        mock_entry = Mock()
+        mock_entry.data = {
+            "shop_id": "56636211",
+            "token": {"access_token": "t", "expires_at": time.time() + 3600},
+            "auth_implementation_client_id": "test_client_id",
+        }
+        mock_entry.entry_id = "test_entry"
+        mock_entry.options = {"stock_threshold": threshold}
+        return EtsyUpdateCoordinator(hass, mock_entry)
+
+    fake_device = Mock()
+    fake_device.id = "test_device_id"
+
+    captured = []
+    hass.bus.async_listen(f"{DOMAIN}_low_stock", lambda event: captured.append(event))
+
+    data = {
+        "shop": {"shop_name": "TestEtsyShop", "review_count": 0},
+        "listings": [{"listing_id": 1, "title": "One of a kind", "quantity": 1}],
+        "transactions": [],
+        "receipts": [],
+        "transactions_count": 0,
+        "listings_count": 1,
+        "last_updated": "x",
+    }
+
+    with patch(
+        "homeassistant.helpers.device_registry.async_get"
+    ) as mock_dr_get:
+        mock_dr_get.return_value.async_get_device.return_value = fake_device
+
+        await _make_coordinator(0)._check_for_changes(data)
+        await hass.async_block_till_done()
+        assert captured == []
+
+        # Counter-case: threshold 1 still alerts on a quantity-1 listing.
+        await _make_coordinator(1)._check_for_changes(data)
+        await hass.async_block_till_done()
+
+    assert len(captured) == 1
+    payload = captured[0].data
+    assert payload["quantity"] == 1
+    assert payload["threshold"] == 1
+    assert payload["listing_title"] == "One of a kind"

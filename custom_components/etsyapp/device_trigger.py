@@ -130,7 +130,7 @@ async def async_get_trigger_capabilities(
             "extra_fields": vol.Schema(
                 {
                     vol.Optional("stock_threshold", default=5): vol.All(
-                        vol.Coerce(int), vol.Range(min=1, max=20)
+                        vol.Coerce(int), vol.Range(min=0, max=20)
                     ),
                 }
             )

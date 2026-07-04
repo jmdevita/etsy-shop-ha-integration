@@ -674,6 +674,6 @@ class EtsyOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(
                     "stock_threshold",
                     default=current_options.get("stock_threshold", 5),
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=20)),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=20)),
             }),
         )
