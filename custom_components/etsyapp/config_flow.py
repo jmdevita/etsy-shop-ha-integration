@@ -79,6 +79,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
         self.etsy_credentials: dict[str, str] | None = None
         self.connection_mode: str | None = None
         self.proxy_config: dict[str, Any] | None = None
+        self._proxy_shops: list[dict[str, Any]] = []
 
     @property
     def logger(self) -> logging.Logger:
@@ -96,6 +97,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
     ) -> FlowResult:
         """Handle reconfiguration of the integration."""
         entry = self._get_reconfigure_entry()
+        errors = {}
 
         # Get the connection mode from the existing entry
         connection_mode = entry.data.get(CONF_CONNECTION_MODE, CONNECTION_MODE_DIRECT)
@@ -105,27 +107,37 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
             new_data = dict(entry.data)
 
             if connection_mode == CONNECTION_MODE_PROXY:
-                # Update proxy credentials
-                new_data[CONF_PROXY_API_KEY] = user_input[CONF_PROXY_API_KEY]
-                new_data[CONF_HMAC_SECRET] = user_input[CONF_HMAC_SECRET]
+                # Strip whitespace from pasted credentials
+                api_key = user_input[CONF_PROXY_API_KEY].strip()
+                hmac_secret = user_input[CONF_HMAC_SECRET].strip()
 
                 # Optionally update proxy URL if provided
+                proxy_url = entry.data.get(CONF_PROXY_URL, "")
                 if CONF_PROXY_URL in user_input:
-                    proxy_url = user_input[CONF_PROXY_URL].rstrip('/')
+                    proxy_url = user_input[CONF_PROXY_URL].strip().rstrip('/')
                     if proxy_url.endswith('/api/v1'):
                         proxy_url = proxy_url[:-7]
+
+                # Validate the new credentials before saving them
+                status, _ = await self._fetch_proxy_shops(proxy_url, api_key, hmac_secret)
+                if status == "ok":
                     new_data[CONF_PROXY_URL] = proxy_url
+                    new_data[CONF_PROXY_API_KEY] = api_key
+                    new_data[CONF_HMAC_SECRET] = hmac_secret
+                else:
+                    errors["base"] = "invalid_proxy_auth" if status == "invalid_auth" else "invalid_proxy"
             else:
                 # Update direct mode credentials
                 new_data["auth_implementation_client_id"] = user_input[CONF_CLIENT_ID]
                 new_data["client_secret"] = user_input[CONF_CLIENT_SECRET]
 
-            # Update and reload the entry
-            return self.async_update_reload_and_abort(
-                entry,
-                data=new_data,
-                reason="reconfigure_successful"
-            )
+            if not errors:
+                # Update and reload the entry
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data=new_data,
+                    reason="reconfigure_successful"
+                )
 
         # Build form based on connection mode
         if connection_mode == CONNECTION_MODE_PROXY:
@@ -140,6 +152,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                     vol.Required(CONF_PROXY_API_KEY, default=proxy_api_key): cv.string,
                     vol.Required(CONF_HMAC_SECRET): cv.string,
                 }),
+                errors=errors,
                 description_placeholders={
                     "shop_name": entry.data.get("shop_name", "your shop"),
                 }
@@ -154,6 +167,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                     vol.Required(CONF_CLIENT_ID, default=client_id): cv.string,
                     vol.Required(CONF_CLIENT_SECRET): cv.string,
                 }),
+                errors=errors,
                 description_placeholders={
                     "shop_name": entry.data.get("shop_name", "your shop"),
                 }
@@ -280,29 +294,27 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
         errors = {}
 
         if user_input is not None:
-            # Validate proxy connection with HMAC if provided
-            valid = await self._validate_proxy_connection(
-                user_input[CONF_PROXY_URL],
-                user_input[CONF_PROXY_API_KEY],
-                user_input.get(CONF_HMAC_SECRET)
-            )
+            # Strip whitespace from pasted credentials and clean up the URL
+            proxy_url = user_input[CONF_PROXY_URL].strip().rstrip('/')
+            if proxy_url.endswith('/api/v1'):
+                proxy_url = proxy_url[:-7]  # Remove '/api/v1'
+            api_key = user_input[CONF_PROXY_API_KEY].strip()
+            hmac_secret = user_input[CONF_HMAC_SECRET].strip()
 
-            if valid:
-                # Clean up the URL before storing
-                proxy_url = user_input[CONF_PROXY_URL].rstrip('/')
-                if proxy_url.endswith('/api/v1'):
-                    proxy_url = proxy_url[:-7]  # Remove '/api/v1'
+            # Validate credentials against the authenticated shops endpoint
+            status, shops = await self._fetch_proxy_shops(proxy_url, api_key, hmac_secret)
 
+            if status == "ok":
                 # Store proxy config and proceed to shop selection
                 self.proxy_config = {
                     CONF_CONNECTION_MODE: CONNECTION_MODE_PROXY,
                     CONF_PROXY_URL: proxy_url,
-                    CONF_PROXY_API_KEY: user_input[CONF_PROXY_API_KEY],
-                    CONF_HMAC_SECRET: user_input[CONF_HMAC_SECRET],
+                    CONF_PROXY_API_KEY: api_key,
+                    CONF_HMAC_SECRET: hmac_secret,
                 }
+                self._proxy_shops = shops
                 return await self.async_step_proxy_shop_selection()
-            else:
-                errors["base"] = "invalid_proxy"
+            errors["base"] = "invalid_proxy_auth" if status == "invalid_auth" else "invalid_proxy"
 
         return self.async_show_form(
             step_id="proxy_config",
@@ -317,19 +329,21 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
             }
         )
 
-    async def _validate_proxy_connection(
+    async def _fetch_proxy_shops(
         self, proxy_url: str, api_key: str, hmac_secret: str | None = None
-    ) -> bool:
-        """Validate proxy connection with HMAC authentication if secret provided."""
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Fetch shops from the proxy, validating credentials in the process.
+
+        The /shops endpoint requires authentication (unlike /health), so this
+        distinguishes bad credentials from connection problems.
+
+        Returns a (status, shops) tuple where status is one of
+        "ok", "invalid_auth" or "cannot_connect".
+        """
         try:
             session = async_get_clientsession(self.hass)
 
-            # Clean up the URL - remove trailing slash and /api/v1 if present
-            proxy_url = proxy_url.rstrip('/')
-            if proxy_url.endswith('/api/v1'):
-                proxy_url = proxy_url[:-7]  # Remove '/api/v1'
-
-            path = "/health"
+            path = "/api/v1/shops"
 
             if hmac_secret:
                 # Use HMAC authentication
@@ -344,17 +358,23 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 # Fallback to simple bearer token (will fail on secure proxy)
                 headers = {"Authorization": f"Bearer {api_key}"}
 
-            # Test the health endpoint
             response = await session.get(
                 f"{proxy_url}{path}",
                 headers=headers,
                 timeout=10
             )
 
-            return response.status == 200
+            if response.status == 200:
+                shops = await response.json()
+                return "ok", shops if isinstance(shops, list) else []
+            if response.status in (401, 403):
+                _LOGGER.error("Proxy rejected credentials: %s", response.status)
+                return "invalid_auth", []
+            _LOGGER.error("Failed to get shops from proxy: %s", response.status)
+            return "cannot_connect", []
         except Exception as e:
-            _LOGGER.error(f"Proxy validation failed: {e}")
-            return False
+            _LOGGER.error("Error connecting to proxy: %s", e)
+            return "cannot_connect", []
 
     async def async_step_shop_selection(
         self, user_input: dict[str, Any] | None = None
@@ -407,8 +427,8 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
         if user_input is not None:
             shop_id = user_input["shop_id"]
 
-            # Get shop name from our stored shop options
-            shops = await self._get_proxy_shops()
+            # Get shop name from the shops fetched during validation
+            shops = self._proxy_shops
             shop_name = next((shop.get("shop_name", shop.get("title", f"Shop {shop_id}")) for shop in shops if str(shop["shop_id"]) == shop_id), f"Shop {shop_id}")
 
             # Create entry with proxy config and selected shop
@@ -421,8 +441,8 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 }
             )
 
-        # Get available shops from proxy
-        shops = await self._get_proxy_shops()
+        # Shops were fetched while validating credentials
+        shops = self._proxy_shops
 
         if not shops:
             return self.async_abort(reason="no_shops_found")
@@ -452,43 +472,6 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 "num_shops": str(len(shops)),
             },
         )
-
-    async def _get_proxy_shops(self) -> list[dict[str, Any]]:
-        """Get shops from proxy service."""
-        try:
-            session = async_get_clientsession(self.hass)
-
-            path = "/api/v1/shops"
-            hmac_secret = self.proxy_config.get(CONF_HMAC_SECRET)
-
-            if hmac_secret:
-                # Use HMAC authentication
-                from .hmac_client import HMACClient
-                hmac_client = HMACClient(self.proxy_config[CONF_PROXY_API_KEY], hmac_secret)
-                headers = hmac_client.get_headers_with_signature(
-                    method="GET",
-                    path=path,
-                    api_key=self.proxy_config[CONF_PROXY_API_KEY]
-                )
-            else:
-                # This will fail on secure proxy
-                headers = {"Authorization": f"Bearer {self.proxy_config[CONF_PROXY_API_KEY]}"}
-
-            response = await session.get(
-                f"{self.proxy_config[CONF_PROXY_URL]}{path}",
-                headers=headers,
-                timeout=10
-            )
-
-            if response.status == 200:
-                return await response.json()
-            else:
-                _LOGGER.error(f"Failed to get shops from proxy: {response.status}")
-                return []
-
-        except Exception as e:
-            _LOGGER.error(f"Error getting shops from proxy: {e}")
-            return []
 
     async def async_oauth_create_entry(self, data: dict[str, Any]) -> FlowResult:
         """Create an entry for Etsy Shop."""

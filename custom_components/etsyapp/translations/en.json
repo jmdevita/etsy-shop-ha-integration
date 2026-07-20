@@ -80,7 +80,8 @@
             "no_shops_found": "No shops found for your Etsy account",
             "oauth_failed": "OAuth authentication failed",
             "invalid_auth": "Invalid authentication",
-            "invalid_proxy": "Failed to connect to proxy service. Please check URL and API key."
+            "invalid_proxy": "Failed to connect to the proxy service. Please check the URL and that the service is reachable.",
+            "invalid_proxy_auth": "The proxy service rejected your credentials. Re-copy the API key and HMAC secret from your bridge dashboard, and make sure the two values are not swapped."
         },
         "abort": {
             "already_configured": "Account is already configured",
