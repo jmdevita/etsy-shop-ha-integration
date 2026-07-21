@@ -81,7 +81,8 @@
             "oauth_failed": "OAuth authentication failed",
             "invalid_auth": "Invalid authentication",
             "invalid_proxy": "Failed to connect to the proxy service. Please check the URL and that the service is reachable.",
-            "invalid_proxy_auth": "The proxy service rejected your credentials. Re-copy the API key and HMAC secret from your bridge dashboard, and make sure the two values are not swapped."
+            "invalid_proxy_auth": "The proxy service rejected your credentials. Re-copy the API key and HMAC secret from your bridge dashboard, and make sure the two values are not swapped.",
+            "invalid_proxy_scheme": "Your proxy URL will not work over http. Please use the https:// address instead."
         },
         "abort": {
             "already_configured": "Account is already configured",

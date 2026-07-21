@@ -25,6 +25,12 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Maps a _fetch_proxy_shops status to the form error key shown to the user.
+_PROXY_ERROR_BY_STATUS = {
+    "invalid_auth": "invalid_proxy_auth",
+    "redirect": "invalid_proxy_scheme",
+}
+
 
 class EtsyOAuth2Implementation(LocalOAuth2ImplementationWithPkce):
     """Local OAuth2 implementation for Etsy with PKCE support."""
@@ -125,7 +131,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                     new_data[CONF_PROXY_API_KEY] = api_key
                     new_data[CONF_HMAC_SECRET] = hmac_secret
                 else:
-                    errors["base"] = "invalid_proxy_auth" if status == "invalid_auth" else "invalid_proxy"
+                    errors["base"] = _PROXY_ERROR_BY_STATUS.get(status, "invalid_proxy")
             else:
                 # Update direct mode credentials
                 new_data["auth_implementation_client_id"] = user_input[CONF_CLIENT_ID]
@@ -314,7 +320,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 }
                 self._proxy_shops = shops
                 return await self.async_step_proxy_shop_selection()
-            errors["base"] = "invalid_proxy_auth" if status == "invalid_auth" else "invalid_proxy"
+            errors["base"] = _PROXY_ERROR_BY_STATUS.get(status, "invalid_proxy")
 
         return self.async_show_form(
             step_id="proxy_config",
@@ -338,7 +344,7 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
         distinguishes bad credentials from connection problems.
 
         Returns a (status, shops) tuple where status is one of
-        "ok", "invalid_auth" or "cannot_connect".
+        "ok", "invalid_auth", "redirect" or "cannot_connect".
         """
         try:
             session = async_get_clientsession(self.hass)
@@ -358,15 +364,24 @@ class EtsyFlowHandler(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain
                 # Fallback to simple bearer token (will fail on secure proxy)
                 headers = {"Authorization": f"Bearer {api_key}"}
 
+            # Don't follow redirects: an http -> https redirect drops the
+            # Authorization header, which surfaces as a confusing 401.
             response = await session.get(
                 f"{proxy_url}{path}",
                 headers=headers,
-                timeout=10
+                timeout=10,
+                allow_redirects=False,
             )
 
             if response.status == 200:
                 shops = await response.json()
                 return "ok", shops if isinstance(shops, list) else []
+            if response.status in (301, 302, 303, 307, 308):
+                _LOGGER.error(
+                    "Proxy URL redirected (%s); likely an http:// URL that must be https://",
+                    response.status,
+                )
+                return "redirect", []
             if response.status in (401, 403):
                 _LOGGER.error("Proxy rejected credentials: %s", response.status)
                 return "invalid_auth", []
