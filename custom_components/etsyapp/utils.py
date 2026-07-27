@@ -56,6 +56,7 @@ def build_transaction_detail(transaction: dict) -> dict:
         "receipt_id": str(transaction.get("receipt_id", "")),
         "title": transaction.get("title"),
         "listing_id": str(transaction.get("listing_id", "")),
+        "sku": transaction.get("sku") or "",
         "buyer_user_id": str(transaction.get("buyer_user_id", "")),
         "quantity": transaction.get("quantity"),
         "price_amount": amount,

@@ -233,6 +233,9 @@ async def test_pending_orders_sensor():
     assert order["buyer_name"] == "Jane Doe"
     assert order["is_shipped"] is False
     assert order["item_count"] == 2
+    # Per-item SKU (issue #24 follow-up); null from Etsy becomes "".
+    assert order["items"][0]["sku"] == "WALLET-BRN-01"
+    assert order["items"][1]["sku"] == ""
     # 1 wallet + 2 keychains
     assert attrs["total_quantity"] == 3
     assert attrs["currency_code"] == "USD"
