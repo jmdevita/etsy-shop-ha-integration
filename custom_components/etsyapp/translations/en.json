@@ -108,7 +108,7 @@
                 "data_description": {
                     "listings_display_limit": "How many listings to show in sensor attributes (1-25)",
                     "transactions_display_limit": "How many recent orders to show in sensor attributes (1-25)",
-                    "stock_threshold": "Alert when stock is at or below this number (0-20). Set to 0 to disable low stock alerts."
+                    "stock_threshold": "Alert when a listing's stock drops to this number or below (0-20). Set to 0 to alert only when a listing sells out. To turn alerts off, disable your low-stock automation."
                 }
             }
         }

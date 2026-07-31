@@ -58,6 +58,11 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
         self._prev_transactions_count = 0
         self._prev_review_count = 0
         self._prev_receipt_ids: set[str] = set()
+        # Last observed quantity/title per active listing, keyed by listing_id.
+        # Used to edge-trigger low-stock alerts (fire once on the downward
+        # crossing, not every refresh) and to infer sold-out when a listing
+        # drops off the active feed. In-memory only; a restart re-baselines.
+        self._prev_listings: dict[str, dict] = {}
         # Rate limiting with exponential backoff
         self._retry_count = 0
         self._max_retries = 5
@@ -906,22 +911,64 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             )
         self._prev_review_count = current_review_count
 
-        # Check for low stock
+        # Check for low stock. Edge-triggered: fires once when a listing
+        # crosses down to `quantity <= stock_threshold`, so a listing that
+        # stays low doesn't re-alert every refresh. Threshold 0 means "alert
+        # only when a listing sells out".
+        stock_threshold = self.config_entry.options.get("stock_threshold", 5)
+
+        def _fire_low_stock(listing_id, title, quantity):
+            _LOGGER.debug(
+                "Low stock detected for listing: %s (quantity: %s)", title, quantity
+            )
+            self._hass.bus.async_fire(
+                f"{DOMAIN}_low_stock",
+                {
+                    "device_id": device_id,
+                    "shop_name": shop.get("shop_name"),
+                    "listing_id": listing_id,
+                    "listing_title": title,
+                    "quantity": quantity,
+                    "threshold": stock_threshold,
+                },
+            )
+
+        # Sold-out listings drop off the active feed, so quantity 0 is never
+        # observed directly — infer it from this cycle's sales instead.
+        sold_by_listing: dict[str, int] = defaultdict(int)
+        for txn in data.get("transactions", []):
+            lid = str(txn.get("listing_id") or "")
+            if lid:
+                sold_by_listing[lid] += txn.get("quantity") or 0
+
         listings = data.get("listings", [])
+        current_ids: set[str] = set()
+        new_prev_listings: dict[str, dict] = {}
+
+        # Active listings: fire on the downward crossing. A first observation
+        # (no prior record) counts as a crossing, so an already-low item
+        # alerts on install/restart.
         for listing in listings:
+            lid = str(listing.get("listing_id") or "")
+            if not lid:
+                continue
+            current_ids.add(lid)
             quantity = listing.get("quantity", 0)
-            # Get the stock threshold from options, default to 5
-            stock_threshold = self.config_entry.options.get("stock_threshold", 5)
-            if quantity > 0 and quantity <= stock_threshold:
-                _LOGGER.debug("Low stock detected for listing: %s (quantity: %s)", listing.get('title'), quantity)
-                self._hass.bus.async_fire(
-                    f"{DOMAIN}_low_stock",
-                    {
-                        "device_id": device_id,
-                        "shop_name": shop.get("shop_name"),
-                        "listing_id": listing.get("listing_id"),
-                        "listing_title": listing.get("title"),
-                        "quantity": quantity,
-                        "threshold": stock_threshold,
-                    }
-                )
+            title = listing.get("title")
+            prev = self._prev_listings.get(lid)
+            was_above = prev is None or prev.get("quantity", 0) > stock_threshold
+            if was_above and quantity <= stock_threshold:
+                _fire_low_stock(lid, title, quantity)
+            new_prev_listings[lid] = {"quantity": quantity, "title": title}
+
+        # Disappeared listings: alert if sales confirm they hit zero. Dropped
+        # from tracking either way, so a restock is treated as a new listing.
+        for lid, prev in self._prev_listings.items():
+            if lid in current_ids:
+                continue
+            prev_qty = prev.get("quantity", 0)
+            sold = sold_by_listing.get(lid, 0)
+            if prev_qty > stock_threshold and sold > 0 and prev_qty - sold <= 0:
+                _fire_low_stock(lid, prev.get("title"), 0)
+
+        self._prev_listings = new_prev_listings

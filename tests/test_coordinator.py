@@ -519,52 +519,134 @@ async def test_new_order_event_payload_shape(hass):
     assert jane["receipt_id"] == "5550001"
 
 
-async def test_low_stock_threshold_zero_disables_alerts(hass):
-    """stock_threshold=0 means no low-stock events, even for quantity-1
-    listings (issue #31 — one-of-a-kind items are intentionally at 1)."""
+def _make_low_stock_coordinator(hass, threshold):
+    mock_entry = Mock()
+    mock_entry.data = {
+        "shop_id": "56636211",
+        "token": {"access_token": "t", "expires_at": time.time() + 3600},
+        "auth_implementation_client_id": "test_client_id",
+    }
+    mock_entry.entry_id = "test_entry"
+    mock_entry.options = {"stock_threshold": threshold}
+    return EtsyUpdateCoordinator(hass, mock_entry)
 
-    def _make_coordinator(threshold):
-        mock_entry = Mock()
-        mock_entry.data = {
-            "shop_id": "56636211",
-            "token": {"access_token": "t", "expires_at": time.time() + 3600},
-            "auth_implementation_client_id": "test_client_id",
-        }
-        mock_entry.entry_id = "test_entry"
-        mock_entry.options = {"stock_threshold": threshold}
-        return EtsyUpdateCoordinator(hass, mock_entry)
 
-    fake_device = Mock()
-    fake_device.id = "test_device_id"
-
-    captured = []
-    hass.bus.async_listen(f"{DOMAIN}_low_stock", lambda event: captured.append(event))
-
-    data = {
+def _low_stock_data(listings, transactions=None):
+    return {
         "shop": {"shop_name": "TestEtsyShop", "review_count": 0},
-        "listings": [{"listing_id": 1, "title": "One of a kind", "quantity": 1}],
-        "transactions": [],
+        "listings": listings,
+        "transactions": transactions or [],
         "receipts": [],
         "transactions_count": 0,
-        "listings_count": 1,
+        "listings_count": len(listings),
         "last_updated": "x",
     }
 
-    with patch(
-        "homeassistant.helpers.device_registry.async_get"
-    ) as mock_dr_get:
+
+async def _run_check(hass, coordinator, data):
+    fake_device = Mock()
+    fake_device.id = "test_device_id"
+    with patch("homeassistant.helpers.device_registry.async_get") as mock_dr_get:
         mock_dr_get.return_value.async_get_device.return_value = fake_device
+        await coordinator._check_for_changes(data)
+    await hass.async_block_till_done()
 
-        await _make_coordinator(0)._check_for_changes(data)
-        await hass.async_block_till_done()
-        assert captured == []
 
-        # Counter-case: threshold 1 still alerts on a quantity-1 listing.
-        await _make_coordinator(1)._check_for_changes(data)
-        await hass.async_block_till_done()
+async def test_low_stock_threshold_zero_alerts_only_on_sellout(hass):
+    """stock_threshold=0 means "alert only when a listing sells out" (issue
+    #31 follow-up). A quantity-1 listing stays quiet; the alert fires when the
+    listing later disappears from the active feed with a matching sale."""
+    captured = []
+    hass.bus.async_listen(f"{DOMAIN}_low_stock", lambda e: captured.append(e))
+
+    coordinator = _make_low_stock_coordinator(hass, 0)
+
+    # Cycle 1: one-of-a-kind item in stock — no alert at threshold 0.
+    await _run_check(
+        hass,
+        coordinator,
+        _low_stock_data([{"listing_id": 1, "title": "One of a kind", "quantity": 1}]),
+    )
+    assert captured == []
+
+    # Cycle 2: the listing sold and dropped off the active feed. The
+    # transaction feed shows the sale, so we infer quantity 0 and alert.
+    await _run_check(
+        hass,
+        coordinator,
+        _low_stock_data(
+            listings=[],
+            transactions=[{"listing_id": 1, "quantity": 1}],
+        ),
+    )
+    assert len(captured) == 1
+    payload = captured[0].data
+    assert payload["quantity"] == 0
+    assert payload["threshold"] == 0
+    assert payload["listing_title"] == "One of a kind"
+
+
+async def test_low_stock_is_edge_triggered(hass):
+    """A listing that stays at/below the threshold alerts once, not every
+    refresh — the fix for the recurring-warning complaint in issue #31."""
+    captured = []
+    hass.bus.async_listen(f"{DOMAIN}_low_stock", lambda e: captured.append(e))
+
+    coordinator = _make_low_stock_coordinator(hass, 3)
+
+    # First observation below threshold fires once.
+    await _run_check(
+        hass, coordinator, _low_stock_data([{"listing_id": 1, "title": "Mug", "quantity": 3}])
+    )
+    assert len(captured) == 1
+
+    # Still low on the next refresh — no repeat alert.
+    await _run_check(
+        hass, coordinator, _low_stock_data([{"listing_id": 1, "title": "Mug", "quantity": 3}])
+    )
+    # Dropped further but still in-band — still no repeat.
+    await _run_check(
+        hass, coordinator, _low_stock_data([{"listing_id": 1, "title": "Mug", "quantity": 2}])
+    )
+    assert len(captured) == 1
+
+
+async def test_low_stock_fires_on_first_observation_below_threshold(hass):
+    """threshold 1 still alerts immediately on an already-low quantity-1
+    listing (fresh coordinator, no prior history)."""
+    captured = []
+    hass.bus.async_listen(f"{DOMAIN}_low_stock", lambda e: captured.append(e))
+
+    coordinator = _make_low_stock_coordinator(hass, 1)
+    await _run_check(
+        hass,
+        coordinator,
+        _low_stock_data([{"listing_id": 1, "title": "One of a kind", "quantity": 1}]),
+    )
 
     assert len(captured) == 1
     payload = captured[0].data
     assert payload["quantity"] == 1
     assert payload["threshold"] == 1
     assert payload["listing_title"] == "One of a kind"
+
+
+async def test_low_stock_sellout_requires_confirming_transaction(hass):
+    """A listing that disappears WITHOUT a matching sale (e.g. it fell out of
+    the fetch window, or was manually delisted) must not fire a false
+    sold-out alert."""
+    captured = []
+    hass.bus.async_listen(f"{DOMAIN}_low_stock", lambda e: captured.append(e))
+
+    coordinator = _make_low_stock_coordinator(hass, 0)
+
+    await _run_check(
+        hass,
+        coordinator,
+        _low_stock_data([{"listing_id": 1, "title": "Vanishing", "quantity": 4}]),
+    )
+    assert captured == []
+
+    # Listing gone, but no transaction accounts for it — stay quiet.
+    await _run_check(hass, coordinator, _low_stock_data(listings=[], transactions=[]))
+    assert captured == []
