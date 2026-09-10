@@ -79,6 +79,7 @@ def test_filter_pending_drops_shipped_canceled_refunded():
 
 def _direct_coordinator(hass):
     mock_entry = Mock()
+    mock_entry.options = {}
     mock_entry.data = {
         "shop_id": "56636211",
         "token": {"access_token": "t"},
@@ -139,6 +140,7 @@ async def test_direct_refresh_populates_pending(hass, aioclient_mock):
     """End-to-end direct-mode refresh adds pending_receipts without disturbing
     the existing keys (non-breaking)."""
     mock_entry = Mock()
+    mock_entry.options = {}
     mock_entry.data = {
         "shop_id": "56636211",
         "token": {"access_token": "test_access_token"},
