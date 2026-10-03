@@ -2,18 +2,34 @@ name: Python package
 
 on:
   push:
+    branches: [main, beta]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
   build:
+    name: build (${{ matrix.python-version }}, HA ${{ matrix.ha-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       max-parallel: 4
       matrix:
-        python-version: ["3.13", "3.14"]
+        include:
+          - python-version: "3.13"
+            ha-version: latest
+          - python-version: "3.14"
+            ha-version: latest
+          # Minimum supported HA; keep in sync with "homeassistant" in hacs.json.
+          # phcc pins an exact HA version; find the matching release on PyPI.
+          - python-version: "3.13"
+            ha-version: "2025.8.3"
+            phcc-version: "0.13.272"
 
     steps:
       - uses: actions/checkout@v6
@@ -23,10 +39,34 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
+      - name: Check minimum HA matches hacs.json
+        if: matrix.ha-version != 'latest'
+        run: |
+          HACS_MIN=$(python -c "import json; print(json.load(open('hacs.json'))['homeassistant'])")
+          if [ "$HACS_MIN" != "${{ matrix.ha-version }}" ]; then
+            echo "::error file=hacs.json::hacs.json says $HACS_MIN but CI tests minimum HA ${{ matrix.ha-version }}; update the matrix in pythonpackage.yaml"
+            exit 1
+          fi
+
       - name: Install dependencies
+        if: matrix.ha-version == 'latest'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.test.txt
+
+      - name: Install dependencies (HA ${{ matrix.ha-version }})
+        if: matrix.ha-version != 'latest'
+        run: |
+          python -m pip install --upgrade pip
+          # Resolve against that release's own pins, as a real install would.
+          # pycares 5 dropped an API the aiodns of that era still uses.
+          curl -fsSL -o constraints.txt \
+            "https://raw.githubusercontent.com/home-assistant/core/${{ matrix.ha-version }}/homeassistant/package_constraints.txt"
+          echo "pycares<5" >> constraints.txt
+          pip install -c constraints.txt \
+            "pytest-homeassistant-custom-component==${{ matrix.phcc-version }}" \
+            pytest-cov python-dateutil
+
       - name: Run pytest
         run: |
           pytest
