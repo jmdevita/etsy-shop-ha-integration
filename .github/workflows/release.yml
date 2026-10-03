@@ -60,7 +60,9 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           RANGE="${PREV:+$PREV..}$TAG"
-          git log --no-merges --pretty='%s' "$RANGE" > commits.txt
+          # Version-bump chores are noise in user-facing notes
+          git log --no-merges --pretty='%s' "$RANGE" \
+            | grep -vE '^chore(\(.+\))?: bump version' > commits.txt || true
 
           # section TITLE PATTERN [grep flags]
           section() {
