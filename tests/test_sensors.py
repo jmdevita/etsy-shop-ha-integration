@@ -246,6 +246,9 @@ async def test_etsy_last_order_sensor():
     titles = [item["title"] for item in items]
     assert "Handmade Leather Wallet" in titles
     assert "Matching Leather Keychain" in titles
+    skus = {item["title"]: item["sku"] for item in items}
+    assert skus["Handmade Leather Wallet"] == "WALLET-BRN-01"
+    assert skus["Matching Leather Keychain"] == ""
 
 
 @pytest.mark.asyncio

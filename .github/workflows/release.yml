@@ -1,33 +1,104 @@
-name: Create Release ZIP
+name: Release
+
+# Pushing a tag is the whole release: stamp the manifest version from the
+# tag, build the HACS zip, and publish the GitHub release with notes built
+# from conventional commits. Tags containing "-" (v1.4.0-beta.1) are
+# published as pre-releases. See RELEASING.md.
 
 on:
-  release:
-    types: [created, published]
+  push:
+    tags:
+      - "v*.*.*"
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    name: Create Release Asset
+  release:
+    name: Publish release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE=true
+            PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          else
+            PRERELEASE=false
+            # Stable notes cover everything since the last stable release
+            PREV=$(git describe --tags --abbrev=0 --exclude '*-*' "${TAG}^" 2>/dev/null || true)
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "prev=$PREV" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION (prerelease=$PRERELEASE, previous=${PREV:-none})"
+
+      - name: Set manifest version from tag
+        run: |
+          sed -i "s/\"version\": \".*\"/\"version\": \"${{ steps.version.outputs.version }}\"/" custom_components/etsyapp/manifest.json
+          grep '"version"' custom_components/etsyapp/manifest.json
 
       - name: Create ZIP file
         run: |
           cd custom_components/etsyapp
-          zip -r ../../etsyapp.zip .
+          zip -r ../../etsyapp.zip . -x '__pycache__/*' '*/__pycache__/*'
           cd ../..
           ls -la etsyapp.zip
 
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+      - name: Build release notes
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./etsyapp.zip
-          asset_name: etsyapp.zip
-          asset_content_type: application/zip
+          PREV: ${{ steps.version.outputs.prev }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          RANGE="${PREV:+$PREV..}$TAG"
+          git log --no-merges --pretty='%s' "$RANGE" > commits.txt
+
+          # section TITLE PATTERN [grep flags]
+          section() {
+            local title="$1" pattern="$2" lines
+            lines=$(grep -E $3 "$pattern" commits.txt || true)
+            if [ -n "$lines" ]; then
+              printf '## %s\n\n' "$title"
+              printf '%s\n' "$lines" | sed 's/^/- /'
+              printf '\n'
+            fi
+          }
+
+          MAINT='chore|ci|build|refactor|perf|test|docs|style'
+          {
+            section "🚀 Features" '^feat(\(.+\))?!?:'
+            section "🐛 Bug Fixes" '^fix(\(.+\))?!?:'
+            section "🧰 Maintenance" "^($MAINT)(\(.+\))?!?:"
+            section "Other" "^(feat|fix|$MAINT)(\(.+\))?!?:" -v
+          } > notes.md
+
+          if [ -n "$PREV" ]; then
+            printf '**Full changelog**: https://github.com/%s/compare/%s...%s\n' "$GITHUB_REPOSITORY" "$PREV" "$TAG" >> notes.md
+          fi
+          cat notes.md
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          FLAGS=()
+          if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then
+            FLAGS+=(--prerelease --latest=false)
+          else
+            FLAGS+=(--latest)
+          fi
+          gh release create "$TAG" etsyapp.zip \
+            --title "$TAG" \
+            --notes-file notes.md \
+            --verify-tag \
+            "${FLAGS[@]}"

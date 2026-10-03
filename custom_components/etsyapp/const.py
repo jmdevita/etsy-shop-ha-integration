@@ -4,6 +4,9 @@ DOMAIN = "etsyapp"
 ETSY_API_BASE = "https://openapi.etsy.com/v3/application"
 UPDATE_INTERVAL_SECONDS = 300  # RATE LIMIT VARIES BY ENDPOINT
 API_FETCH_LIMIT = 10  # Limit for listings and transactions fetched from API
+# Pending-orders (unshipped) fetch: lookback window and page size.
+PENDING_LOOKBACK_DAYS = 365
+PENDING_FETCH_LIMIT = 100  # Etsy per-page max
 
 # Connection modes
 CONNECTION_MODE_DIRECT = "direct"

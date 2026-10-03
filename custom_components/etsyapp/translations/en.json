@@ -80,7 +80,9 @@
             "no_shops_found": "No shops found for your Etsy account",
             "oauth_failed": "OAuth authentication failed",
             "invalid_auth": "Invalid authentication",
-            "invalid_proxy": "Failed to connect to proxy service. Please check URL and API key."
+            "invalid_proxy": "Failed to connect to the proxy service. Please check the URL and that the service is reachable.",
+            "invalid_proxy_auth": "The proxy service rejected your credentials. Re-copy the API key and HMAC secret from your bridge dashboard, and make sure the two values are not swapped.",
+            "invalid_proxy_scheme": "Your proxy URL will not work over http. Please use the https:// address instead."
         },
         "abort": {
             "already_configured": "Account is already configured",
@@ -106,7 +108,7 @@
                 "data_description": {
                     "listings_display_limit": "How many listings to show in sensor attributes (1-25)",
                     "transactions_display_limit": "How many recent orders to show in sensor attributes (1-25)",
-                    "stock_threshold": "Alert when stock falls below this number (1-20)"
+                    "stock_threshold": "Alert when a listing's stock drops to this number or below (0-20). Set to 0 to alert only when a listing sells out. To turn alerts off, disable your low-stock automation."
                 }
             }
         }

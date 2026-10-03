@@ -2,10 +2,15 @@ name: HACS Action
 
 on:
   push:
+    branches: [main, beta]
   pull_request:
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

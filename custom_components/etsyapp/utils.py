@@ -56,6 +56,7 @@ def build_transaction_detail(transaction: dict) -> dict:
         "receipt_id": str(transaction.get("receipt_id", "")),
         "title": transaction.get("title"),
         "listing_id": str(transaction.get("listing_id", "")),
+        "sku": transaction.get("sku") or "",
         "buyer_user_id": str(transaction.get("buyer_user_id", "")),
         "quantity": transaction.get("quantity"),
         "price_amount": amount,
@@ -165,3 +166,9 @@ def build_receipt_summary(receipt: dict, payment: dict | None = None) -> dict:
             summary["amount_net"] = net["amount"]
 
     return summary
+
+
+def build_pending_summary(receipt: dict) -> dict:
+    """Per-order attribute dict for a pending receipt — same shape as
+    sensor.etsy_last_order (issue #24)."""
+    return build_receipt_summary(receipt)

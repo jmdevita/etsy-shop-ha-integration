@@ -21,6 +21,8 @@ from .const import (
     ETSY_API_BASE,
     UPDATE_INTERVAL_SECONDS,
     API_FETCH_LIMIT,
+    PENDING_LOOKBACK_DAYS,
+    PENDING_FETCH_LIMIT,
     CONNECTION_MODE_DIRECT,
     CONNECTION_MODE_PROXY,
     CONF_CONNECTION_MODE,
@@ -33,6 +35,14 @@ from .utils import build_receipt_summary, build_transaction_detail
 
 _LOGGER = logging.getLogger(__name__)
 type EtsyConfigEntry = ConfigEntry[EtsyUpdateCoordinator]
+
+# Statuses that make an unshipped order non-pending (normalized form).
+_NON_PENDING_STATUSES = frozenset({"canceled", "cancelled", "fully refunded"})
+
+
+def _normalize_status(status: Any) -> str:
+    """Normalize an Etsy receipt status for comparison (lowercase, no underscores)."""
+    return str(status or "").strip().lower().replace("_", " ")
 
 
 class EtsyUpdateCoordinator(DataUpdateCoordinator):
@@ -48,6 +58,11 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
         self._prev_transactions_count = 0
         self._prev_review_count = 0
         self._prev_receipt_ids: set[str] = set()
+        # Last observed quantity/title per active listing, keyed by listing_id.
+        # Used to edge-trigger low-stock alerts (fire once on the downward
+        # crossing, not every refresh) and to infer sold-out when a listing
+        # drops off the active feed. In-memory only; a restart re-baselines.
+        self._prev_listings: dict[str, dict] = {}
         # Rate limiting with exponential backoff
         self._retry_count = 0
         self._max_retries = 5
@@ -250,12 +265,17 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                 transactions_count = len(flattened_transactions)
                 last_payment = await self._fetch_last_payment_proxy(receipts)
 
+            pending_receipts = self._pending_or_last_known(
+                await self._fetch_pending_receipts_proxy()
+            )
+
             proxy_data = {
                 "shop": shop_info,
                 "listings": listings_data.get("results", []),
                 "listings_count": listings_data.get("count", 0),
                 "transactions": flattened_transactions,
                 "receipts": receipts,
+                "pending_receipts": pending_receipts,
                 "last_payment": last_payment,
                 "transactions_count": transactions_count,
                 "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
@@ -364,6 +384,95 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
         )
         data["results"] = results
         return data
+
+    @staticmethod
+    def _pending_query_params() -> dict[str, Any]:
+        """Query params for the pending (unshipped) receipts fetch.
+
+        min_created is a day-quantized lookback window.
+        """
+        day = 86400
+        min_created = int(time.time() // day * day) - PENDING_LOOKBACK_DAYS * day
+        return {
+            "limit": PENDING_FETCH_LIMIT,
+            "was_paid": "true",
+            "was_shipped": "false",
+            "was_canceled": "false",
+            "min_created": min_created,
+        }
+
+    @staticmethod
+    def _filter_pending(receipts: list[dict]) -> list[dict]:
+        """Keep unshipped receipts that are still fulfillable (drop shipped,
+        canceled, and fully-refunded orders)."""
+        if len(receipts) >= PENDING_FETCH_LIMIT:
+            _LOGGER.warning(
+                "Pending receipts hit the fetch limit (%s); some open orders "
+                "may be omitted",
+                PENDING_FETCH_LIMIT,
+            )
+        return [
+            r
+            for r in receipts
+            if not r.get("is_shipped")
+            and _normalize_status(r.get("status")) not in _NON_PENDING_STATUSES
+        ]
+
+    async def _fetch_pending_receipts(
+        self, url: str, headers: dict
+    ) -> list[dict] | None:
+        """GET and filter the pending (unshipped) receipts page.
+
+        Returns the filtered list, or None on a transient failure (caller keeps
+        the last-known list). Raises UpdateFailed on 429 to drive backoff.
+        """
+        try:
+            response = await self.session.get(
+                url, headers=headers, params=self._pending_query_params()
+            )
+            if response.status == 429:
+                retry_after = response.headers.get("Retry-After", "60")
+                raise UpdateFailed(
+                    f"Rate limit exceeded (429). Retry after {retry_after} seconds"
+                )
+            if response.status != 200:
+                _LOGGER.debug(
+                    "Pending receipts fetch skipped (status %s)", response.status
+                )
+                return None
+            data = await response.json()
+            return self._filter_pending(data.get("results") or [])
+        except UpdateFailed:
+            raise
+        except Exception as err:  # noqa: BLE001 - secondary fetch, degrade quietly
+            _LOGGER.debug("Pending receipts fetch failed: %s", err)
+            return None
+
+    async def _fetch_pending_receipts_direct(self, headers: dict) -> list[dict] | None:
+        """Fetch unshipped receipts for the pending-orders sensor (direct mode)."""
+        url = f"{ETSY_API_BASE}/shops/{self.shop_id}/receipts"
+        return await self._fetch_pending_receipts(url, headers)
+
+    async def _fetch_pending_receipts_proxy(self) -> list[dict] | None:
+        """Fetch unshipped receipts via proxy (pending-orders sensor)."""
+        path = f"/api/v1/shops/{self.shop_id}/receipts"
+        try:
+            headers = self.hmac_client.get_headers_with_signature(
+                method="GET",
+                path=path,
+                api_key=self.proxy_api_key,
+            )
+        except Exception as err:  # noqa: BLE001 - secondary fetch, degrade quietly
+            _LOGGER.debug("Pending receipts HMAC signing failed: %s", err)
+            return None
+        return await self._fetch_pending_receipts(f"{self.proxy_url}{path}", headers)
+
+    def _pending_or_last_known(self, fetched: list[dict] | None) -> list[dict]:
+        """Return the fetched pending list, or the previous cycle's list when
+        the fetch failed (None). An explicit empty list is kept as-is."""
+        if fetched is not None:
+            return fetched
+        return (self._last_successful_data or {}).get("pending_receipts") or []
 
     async def _fetch_last_payment_proxy(self, receipts: list[dict]) -> dict | None:
         """Fetch the payment for the most recent receipt via proxy. Best-effort."""
@@ -582,12 +691,17 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             # surfaces amount_net.
             last_payment = await self._fetch_last_payment_direct(receipts, headers)
 
+            pending_receipts = self._pending_or_last_known(
+                await self._fetch_pending_receipts_direct(headers)
+            )
+
             # Combine data
             combined_data = {
                 "shop": shop_data,  # Already extracted above
                 "listings": listings_data.get("results", []),
                 "transactions": flattened_transactions,
                 "receipts": receipts,
+                "pending_receipts": pending_receipts,
                 "last_payment": last_payment,
                 "listings_count": listings_data.get("count", 0),
                 "transactions_count": len(flattened_transactions),
@@ -797,22 +911,64 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             )
         self._prev_review_count = current_review_count
 
-        # Check for low stock
+        # Check for low stock. Edge-triggered: fires once when a listing
+        # crosses down to `quantity <= stock_threshold`, so a listing that
+        # stays low doesn't re-alert every refresh. Threshold 0 means "alert
+        # only when a listing sells out".
+        stock_threshold = self.config_entry.options.get("stock_threshold", 5)
+
+        def _fire_low_stock(listing_id, title, quantity):
+            _LOGGER.debug(
+                "Low stock detected for listing: %s (quantity: %s)", title, quantity
+            )
+            self._hass.bus.async_fire(
+                f"{DOMAIN}_low_stock",
+                {
+                    "device_id": device_id,
+                    "shop_name": shop.get("shop_name"),
+                    "listing_id": listing_id,
+                    "listing_title": title,
+                    "quantity": quantity,
+                    "threshold": stock_threshold,
+                },
+            )
+
+        # Sold-out listings drop off the active feed, so quantity 0 is never
+        # observed directly — infer it from this cycle's sales instead.
+        sold_by_listing: dict[str, int] = defaultdict(int)
+        for txn in data.get("transactions", []):
+            lid = str(txn.get("listing_id") or "")
+            if lid:
+                sold_by_listing[lid] += txn.get("quantity") or 0
+
         listings = data.get("listings", [])
+        current_ids: set[str] = set()
+        new_prev_listings: dict[str, dict] = {}
+
+        # Active listings: fire on the downward crossing. A first observation
+        # (no prior record) counts as a crossing, so an already-low item
+        # alerts on install/restart.
         for listing in listings:
+            lid = str(listing.get("listing_id") or "")
+            if not lid:
+                continue
+            current_ids.add(lid)
             quantity = listing.get("quantity", 0)
-            # Get the stock threshold from options, default to 5
-            stock_threshold = self.config_entry.options.get("stock_threshold", 5)
-            if quantity > 0 and quantity <= stock_threshold:
-                _LOGGER.debug("Low stock detected for listing: %s (quantity: %s)", listing.get('title'), quantity)
-                self._hass.bus.async_fire(
-                    f"{DOMAIN}_low_stock",
-                    {
-                        "device_id": device_id,
-                        "shop_name": shop.get("shop_name"),
-                        "listing_id": listing.get("listing_id"),
-                        "listing_title": listing.get("title"),
-                        "quantity": quantity,
-                        "threshold": stock_threshold,
-                    }
-                )
+            title = listing.get("title")
+            prev = self._prev_listings.get(lid)
+            was_above = prev is None or prev.get("quantity", 0) > stock_threshold
+            if was_above and quantity <= stock_threshold:
+                _fire_low_stock(lid, title, quantity)
+            new_prev_listings[lid] = {"quantity": quantity, "title": title}
+
+        # Disappeared listings: alert if sales confirm they hit zero. Dropped
+        # from tracking either way, so a restock is treated as a new listing.
+        for lid, prev in self._prev_listings.items():
+            if lid in current_ids:
+                continue
+            prev_qty = prev.get("quantity", 0)
+            sold = sold_by_listing.get(lid, 0)
+            if prev_qty > stock_threshold and sold > 0 and prev_qty - sold <= 0:
+                _fire_low_stock(lid, prev.get("title"), 0)
+
+        self._prev_listings = new_prev_listings
