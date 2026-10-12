@@ -2,12 +2,15 @@
 
 from collections import defaultdict
 from datetime import timedelta, datetime
+from email.utils import parsedate_to_datetime
 import asyncio
 import json
 import logging
 import random
 import time
 from typing import Any
+
+from aiohttp import ClientResponse
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -20,6 +23,8 @@ from .const import (
     DOMAIN,
     ETSY_API_BASE,
     UPDATE_INTERVAL_SECONDS,
+    MIN_UPDATE_INTERVAL_SECONDS,
+    CONF_UPDATE_INTERVAL,
     API_FETCH_LIMIT,
     PENDING_LOOKBACK_DAYS,
     PENDING_FETCH_LIMIT,
@@ -45,6 +50,54 @@ def _normalize_status(status: Any) -> str:
     return str(status or "").strip().lower().replace("_", " ")
 
 
+class EtsyRateLimitError(UpdateFailed):
+    """Etsy or the proxy responded 429 (rate limited)."""
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _parse_retry_after(response: ClientResponse) -> float | None:
+    """Parse a Retry-After header (delta-seconds or HTTP-date) into seconds."""
+    value = response.headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        return max(0.0, parsedate_to_datetime(value).timestamp() - time.time())
+    except (TypeError, ValueError):
+        return None
+
+
+def _raise_for_rate_limit(response: ClientResponse, context: str) -> None:
+    """Raise EtsyRateLimitError if the response is a 429."""
+    if response.status != 429:
+        return
+    retry_after = _parse_retry_after(response)
+    suffix = (
+        f"; retry after {retry_after:.0f} seconds" if retry_after is not None else ""
+    )
+    raise EtsyRateLimitError(
+        f"Rate limit exceeded (429) on {context}{suffix}", retry_after
+    )
+
+
+def _is_rate_limit_error(err: Exception) -> bool:
+    """Whether an exception represents a 429, including wrapped ones."""
+    if isinstance(err, EtsyRateLimitError):
+        return True
+    error_str = str(err).lower()
+    return (
+        "429" in error_str
+        or "rate limit" in error_str
+        or "too many requests" in error_str
+    )
+
+
 class EtsyUpdateCoordinator(DataUpdateCoordinator):
     """Class to handle fetching data from the API."""
 
@@ -63,10 +116,15 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
         # crossing, not every refresh) and to infer sold-out when a listing
         # drops off the active feed. In-memory only; a restart re-baselines.
         self._prev_listings: dict[str, dict] = {}
-        # Rate limiting with exponential backoff
+        # Rate limiting with exponential backoff (direct mode only; proxy
+        # mode never retries in-cycle — see _fetch_with_retry).
         self._retry_count = 0
         self._max_retries = 5
         self._base_delay = 1  # Start with 1 second
+        self._max_in_cycle_wait = 60  # Cap on a single in-cycle backoff sleep
+        # True while consecutive refreshes are being rate limited. Used to
+        # log the first 429 of an episode at WARNING and the rest at DEBUG.
+        self._rate_limit_episode = False
         # Cache last successful data to prevent unavailability during token refresh
         self._last_successful_data = None
         self._consecutive_failures = 0
@@ -92,12 +150,17 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             self.oauth_session = None
             self._oauth_session_initialized = False
 
+        update_interval_seconds = max(
+            MIN_UPDATE_INTERVAL_SECONDS,
+            entry.options.get(CONF_UPDATE_INTERVAL, UPDATE_INTERVAL_SECONDS),
+        )
+
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
             config_entry=entry,
-            update_interval=timedelta(seconds=UPDATE_INTERVAL_SECONDS),
+            update_interval=timedelta(seconds=update_interval_seconds),
             always_update=False,  # Changed to False per HA best practices for performance
         )
 
@@ -105,7 +168,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             "Initialized Etsy coordinator for shop %s with %s mode, update interval: %s seconds",
             self.shop_id,
             self.connection_mode,
-            UPDATE_INTERVAL_SECONDS
+            update_interval_seconds
         )
 
     async def _get_oauth_implementation(self):
@@ -135,6 +198,9 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                 # Store successful data for use during temporary failures
                 self._last_successful_data = data
                 self._consecutive_failures = 0
+                if self._rate_limit_episode:
+                    self._rate_limit_episode = False
+                    _LOGGER.info("Etsy rate limiting has cleared, refreshes resumed")
                 _LOGGER.debug("Successfully fetched data for shop %s", self.shop_id)
 
             return data
@@ -147,9 +213,9 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             error_str = str(err).lower()
 
             # Check if this is a temporary failure that shouldn't cause unavailability
+            is_rate_limit = _is_rate_limit_error(err)
             is_temporary = (
-                "rate limit" in error_str or
-                "429" in error_str or
+                is_rate_limit or
                 "token" in error_str or
                 "refresh" in error_str or
                 "timeout" in error_str or
@@ -158,19 +224,45 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
 
             if is_temporary and self._last_successful_data:
                 # Return cached data for temporary failures to prevent unavailability
-                _LOGGER.warning(
-                    "Temporary failure (attempt %s): %s. Using cached data to maintain availability.",
-                    self._consecutive_failures,
-                    err
-                )
+                if is_rate_limit:
+                    # Already surfaced once per episode by _fetch_with_retry.
+                    _LOGGER.debug(
+                        "Rate limited (failure %s); using cached data to maintain availability",
+                        self._consecutive_failures,
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Temporary failure (attempt %s): %s. Using cached data to maintain availability.",
+                        self._consecutive_failures,
+                        err
+                    )
                 return self._last_successful_data
 
             # For persistent failures or no cached data, raise the error
-            _LOGGER.error("Failed to update data: %s", err)
+            if is_rate_limit:
+                # Already surfaced once per episode by _fetch_with_retry.
+                _LOGGER.debug("Refresh skipped while rate limited: %s", err)
+            else:
+                _LOGGER.error("Failed to update data: %s", err)
             raise UpdateFailed(f"Failed to update data: {err}") from err
 
+    def _log_rate_limited(self, msg: str, *args: Any) -> None:
+        """Log a rate-limit event: WARNING on the first hit of an episode,
+        DEBUG for the rest, so a sustained 429 spell doesn't flood the log."""
+        if self._rate_limit_episode:
+            _LOGGER.debug(msg, *args)
+        else:
+            self._rate_limit_episode = True
+            _LOGGER.warning(msg, *args)
+
     async def _fetch_with_retry(self, fetch_func):
-        """Fetch data with exponential backoff retry logic."""
+        """Fetch data, retrying rate-limited cycles with backoff (direct mode).
+
+        Proxy mode never retries within a cycle: the proxy's Etsy quota is
+        shared across all users of the integration, so in-cycle retries only
+        amplify load on an already-exhausted budget. The next scheduled
+        refresh is the retry, and cached data keeps entities available.
+        """
         last_error = None
 
         for attempt in range(self._max_retries):
@@ -178,32 +270,58 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                 return await fetch_func()
             except Exception as err:
                 last_error = err
-                error_str = str(err).lower()
-
-                # Check if it's a rate limit error
-                if "429" in error_str or "rate limit" in error_str or "too many requests" in error_str:
-                    self._retry_count = attempt + 1
-                    if self._retry_count < self._max_retries:
-                        # Calculate exponential backoff delay
-                        delay = self._base_delay * (2 ** attempt)
-                        # Add jitter to prevent thundering herd
-                        jitter = random.uniform(0, delay * 0.1)
-                        actual_delay = delay + jitter
-
-                        _LOGGER.info(
-                            "Rate limit hit, retrying in %.2f seconds (attempt %s/%s)",
-                            actual_delay,
-                            self._retry_count,
-                            self._max_retries
-                        )
-                        await asyncio.sleep(actual_delay)
-                        continue
-                    else:
-                        _LOGGER.error("Max retries reached for rate limit")
-                        raise UpdateFailed(f"Rate limit exceeded after {self._max_retries} retries") from err
 
                 # For non-rate-limit errors, fail immediately
-                raise err
+                if not _is_rate_limit_error(err):
+                    raise
+
+                retry_after = getattr(err, "retry_after", None)
+
+                if self.connection_mode == CONNECTION_MODE_PROXY:
+                    self._log_rate_limited(
+                        "Etsy proxy rate limit hit (Retry-After: %s); skipping "
+                        "this refresh, will try again at the next scheduled one",
+                        f"{retry_after:.0f}s" if retry_after is not None else "not provided",
+                    )
+                    raise
+
+                self._retry_count = attempt + 1
+                if self._retry_count >= self._max_retries:
+                    self._log_rate_limited(
+                        "Etsy rate limit still hit after %s attempts; giving up "
+                        "until the next scheduled refresh",
+                        self._retry_count,
+                    )
+                    raise UpdateFailed(
+                        f"Rate limit exceeded after {self._max_retries} retries"
+                    ) from err
+
+                # Honour Retry-After when the server provides it; otherwise
+                # (or if it's shorter) fall back to exponential backoff.
+                backoff = self._base_delay * (2 ** attempt)
+                delay = max(retry_after or 0.0, backoff)
+                # Add jitter to prevent thundering herd
+                delay += random.uniform(0, backoff * 0.1)
+
+                if delay > self._max_in_cycle_wait:
+                    # Too long to hold this cycle open — defer to the next
+                    # scheduled refresh instead of sleeping for minutes.
+                    self._log_rate_limited(
+                        "Etsy rate limit hit, asked to wait %.0f seconds; "
+                        "deferring to the next scheduled refresh",
+                        delay,
+                    )
+                    raise UpdateFailed(
+                        f"Rate limit exceeded (429); retry after {delay:.0f} seconds"
+                    ) from err
+
+                self._log_rate_limited(
+                    "Etsy rate limit hit, retrying in %.2f seconds (attempt %s/%s)",
+                    delay,
+                    self._retry_count,
+                    self._max_retries,
+                )
+                await asyncio.sleep(delay)
 
         # If we've exhausted all retries
         raise UpdateFailed(f"Failed after {self._max_retries} attempts: {last_error}") from last_error
@@ -285,6 +403,10 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             self._last_successful_data = proxy_data
 
             return proxy_data
+        except UpdateFailed:
+            # Includes EtsyRateLimitError — preserve the type (and its
+            # retry_after) for _fetch_with_retry; logging happens there.
+            raise
         except Exception as e:
             _LOGGER.error("Error fetching data via proxy: %s", e)
             raise UpdateFailed(f"Failed to fetch data via proxy: {e}")
@@ -302,9 +424,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             f"{self.proxy_url}{path}",
             headers=headers,
         )
-        if response.status == 429:
-            text = await response.text()
-            raise UpdateFailed(f"Rate limit exceeded (429): {text}")
+        _raise_for_rate_limit(response, "shop info")
         if response.status != 200:
             text = await response.text()
             raise UpdateFailed(f"Failed to get shop info: {text}")
@@ -326,6 +446,9 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             headers=headers,
             params=params,
         )
+        # A 429 must abort the cycle — returning an empty result here would
+        # publish listings_count 0 as if it were real data.
+        _raise_for_rate_limit(response, "listings")
         if response.status != 200:
             text = await response.text()
             _LOGGER.warning("Failed to get listings: %s", text)
@@ -345,6 +468,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             f"{self.proxy_url}{path}",
             headers=headers,
         )
+        _raise_for_rate_limit(response, "transactions")
         if response.status != 200:
             text = await response.text()
             _LOGGER.warning("Failed to get transactions: %s", text)
@@ -369,6 +493,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             headers=headers,
             params=params,
         )
+        _raise_for_rate_limit(response, "receipts")
         if response.status == 404:
             return None
         if response.status != 200:
@@ -430,11 +555,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             response = await self.session.get(
                 url, headers=headers, params=self._pending_query_params()
             )
-            if response.status == 429:
-                retry_after = response.headers.get("Retry-After", "60")
-                raise UpdateFailed(
-                    f"Rate limit exceeded (429). Retry after {retry_after} seconds"
-                )
+            _raise_for_rate_limit(response, "pending receipts")
             if response.status != 200:
                 _LOGGER.debug(
                     "Pending receipts fetch skipped (status %s)", response.status
@@ -619,10 +740,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                 raise ConfigEntryAuthFailed("Authentication failed. Please re-authenticate.")
 
             # Check for rate limiting
-            if shop_response.status == 429:
-                retry_after = shop_response.headers.get("Retry-After", "60")
-                _LOGGER.warning("Etsy API rate limit hit. Retry after %s seconds", retry_after)
-                raise UpdateFailed(f"Rate limit exceeded (429). Retry after {retry_after} seconds")
+            _raise_for_rate_limit(shop_response, "shop info")
 
             shop_response.raise_for_status()
             shop_data_raw = await shop_response.json()
@@ -645,10 +763,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
             )
 
             # Check for rate limiting
-            if listings_response.status == 429:
-                retry_after = listings_response.headers.get("Retry-After", "60")
-                _LOGGER.warning("Etsy API rate limit hit on listings. Retry after %s seconds", retry_after)
-                raise UpdateFailed(f"Rate limit exceeded (429). Retry after {retry_after} seconds")
+            _raise_for_rate_limit(listings_response, "listings")
 
             listings_response.raise_for_status()
             listings_data = await listings_response.json()
@@ -667,10 +782,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
                 receipts_url, headers=headers, params=receipts_params
             )
 
-            if receipts_response.status == 429:
-                retry_after = receipts_response.headers.get("Retry-After", "60")
-                _LOGGER.warning("Etsy API rate limit hit on receipts. Retry after %s seconds", retry_after)
-                raise UpdateFailed(f"Rate limit exceeded (429). Retry after {retry_after} seconds")
+            _raise_for_rate_limit(receipts_response, "receipts")
 
             receipts_response.raise_for_status()
             receipts_data = await receipts_response.json()
@@ -715,6 +827,10 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
 
         except ConfigEntryAuthFailed:
             # Re-raise authentication failures without wrapping
+            raise
+        except UpdateFailed:
+            # Includes EtsyRateLimitError — preserve the type (and its
+            # retry_after) for _fetch_with_retry.
             raise
         except Exception as err:
             raise UpdateFailed(f"Error fetching data from Etsy API: {err}") from err

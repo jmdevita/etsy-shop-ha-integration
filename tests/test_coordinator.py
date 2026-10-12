@@ -6,7 +6,10 @@ from pathlib import Path
 import json
 import time
 from datetime import datetime
-from custom_components.etsyapp.coordinator import EtsyUpdateCoordinator
+from custom_components.etsyapp.coordinator import (
+    EtsyRateLimitError,
+    EtsyUpdateCoordinator,
+)
 
 from homeassistant.setup import async_setup_component
 from homeassistant.exceptions import ConfigEntryAuthFailed
@@ -28,6 +31,7 @@ async def test_etsy_update_coordinator(hass, aioclient_mock):
 
     # Mock ConfigEntry
     mock_entry = Mock()
+    mock_entry.options = {}
     mock_entry.data = {
         "shop_id": "56636211",
         "token": {
@@ -183,6 +187,7 @@ async def test_token_refresh_returns_cached_data(hass, aioclient_mock):
 
     # Mock ConfigEntry with token that's about to expire
     mock_entry = Mock()
+    mock_entry.options = {}
     mock_entry.data = {
         "shop_id": "56636211",
         "token": {
@@ -245,6 +250,7 @@ async def test_rate_limit_returns_cached_data(hass, aioclient_mock):
         etsy_data = json.load(file)
 
     mock_entry = Mock()
+    mock_entry.options = {}
     mock_entry.data = {
         "shop_id": "56636211",
         "token": {"access_token": "test_access_token", "expires_at": time.time() + 3600},
@@ -286,6 +292,7 @@ async def test_rate_limit_returns_cached_data(hass, aioclient_mock):
 async def test_auth_failure_still_raises(hass, aioclient_mock):
     """Test that authentication failures trigger reauth flow."""
     mock_entry = Mock()
+    mock_entry.options = {}
     mock_entry.data = {
         "shop_id": "56636211",
         "token": {"access_token": "invalid_token", "expires_at": time.time() + 3600},
@@ -311,6 +318,7 @@ async def test_auth_failure_still_raises(hass, aioclient_mock):
 async def test_consecutive_failures_tracking(hass):
     """Test that consecutive failures are tracked correctly."""
     mock_entry = Mock()
+    mock_entry.options = {}
     mock_entry.data = {
         "shop_id": "56636211",
         "token": {"access_token": "test_token", "expires_at": time.time() + 3600},
@@ -346,6 +354,7 @@ async def test_payment_fetch_failure_is_graceful(hass, aioclient_mock):
         receipts_data = json.load(file)
 
     mock_entry = Mock()
+    mock_entry.options = {}
     mock_entry.data = {
         "shop_id": "56636211",
         "token": {"access_token": "t"},
@@ -398,6 +407,7 @@ async def test_proxy_404_falls_back_to_transactions(hass):
     )
 
     mock_entry = Mock()
+    mock_entry.options = {}
     mock_entry.data = {
         CONF_CONNECTION_MODE: CONNECTION_MODE_PROXY,
         CONF_PROXY_URL: "https://proxy.example",
@@ -451,6 +461,7 @@ async def test_new_order_event_payload_shape(hass):
         receipts_data = json.load(file)
 
     mock_entry = Mock()
+    mock_entry.options = {}
     mock_entry.data = {
         "shop_id": "56636211",
         "token": {"access_token": "t", "expires_at": time.time() + 3600},
@@ -521,6 +532,7 @@ async def test_new_order_event_payload_shape(hass):
 
 def _make_low_stock_coordinator(hass, threshold):
     mock_entry = Mock()
+    mock_entry.options = {}
     mock_entry.data = {
         "shop_id": "56636211",
         "token": {"access_token": "t", "expires_at": time.time() + 3600},
@@ -650,3 +662,166 @@ async def test_low_stock_sellout_requires_confirming_transaction(hass):
     # Listing gone, but no transaction accounts for it — stay quiet.
     await _run_check(hass, coordinator, _low_stock_data(listings=[], transactions=[]))
     assert captured == []
+
+
+def _make_proxy_entry(options=None):
+    """Build a Mock proxy-mode config entry."""
+    from custom_components.etsyapp.const import (
+        CONF_CONNECTION_MODE,
+        CONF_HMAC_SECRET,
+        CONF_PROXY_API_KEY,
+        CONF_PROXY_URL,
+        CONNECTION_MODE_PROXY,
+    )
+
+    mock_entry = Mock()
+    mock_entry.options = options or {}
+    mock_entry.data = {
+        CONF_CONNECTION_MODE: CONNECTION_MODE_PROXY,
+        CONF_PROXY_URL: "https://proxy.example",
+        CONF_PROXY_API_KEY: "k",
+        CONF_HMAC_SECRET: "s",
+        "shop_id": "56636211",
+    }
+    return mock_entry
+
+
+@pytest.mark.asyncio
+async def test_proxy_rate_limit_skips_in_cycle_retries(hass):
+    """Proxy mode must not retry within a cycle on 429 — the proxy quota is
+    shared, so the next scheduled refresh is the retry. Cached data keeps
+    entities available, and the episode flag resets on recovery."""
+    coordinator = EtsyUpdateCoordinator(hass, _make_proxy_entry())
+    cached = {"shop": {"shop_name": "Cached"}, "listings": [], "transactions": []}
+    coordinator._last_successful_data = cached
+
+    with patch.object(
+        coordinator,
+        "_fetch_via_proxy",
+        side_effect=EtsyRateLimitError("Rate limit exceeded (429) on shop info", 60),
+    ) as mock_fetch:
+        await coordinator.async_refresh()
+
+    assert mock_fetch.call_count == 1  # no in-cycle retries
+    assert coordinator.last_update_success
+    assert coordinator.data == cached
+    assert coordinator._rate_limit_episode
+
+    # Recovery clears the episode flag.
+    fresh = {"shop": {"shop_name": "Fresh"}, "listings": [], "transactions": []}
+    with patch.object(
+        coordinator, "_fetch_via_proxy", return_value=fresh
+    ), patch.object(coordinator, "_check_for_changes", new_callable=AsyncMock):
+        await coordinator.async_refresh()
+
+    assert coordinator.data == fresh
+    assert not coordinator._rate_limit_episode
+
+
+@pytest.mark.asyncio
+async def test_proxy_429_on_listings_aborts_cycle(hass, aioclient_mock):
+    """A 429 on a proxy sub-fetch must abort the cycle instead of publishing
+    empty results as if they were real data."""
+    coordinator = EtsyUpdateCoordinator(hass, _make_proxy_entry())
+
+    base = "https://proxy.example/api/v1/shops/56636211"
+    aioclient_mock.get(base, json={"shop_name": "TestShop"}, status=200)
+    aioclient_mock.get(
+        f"{base}/listings/active",
+        status=429,
+        headers={"Retry-After": "17"},
+    )
+
+    with pytest.raises(EtsyRateLimitError) as excinfo:
+        await coordinator._fetch_via_proxy()
+
+    assert excinfo.value.retry_after == 17
+
+
+@pytest.mark.asyncio
+async def test_direct_retry_honors_retry_after(hass):
+    """Direct-mode in-cycle retries must wait at least the server's
+    Retry-After rather than the bare exponential schedule."""
+    mock_entry = Mock()
+    mock_entry.options = {}
+    mock_entry.data = {
+        "shop_id": "56636211",
+        "token": {"access_token": "t", "expires_at": time.time() + 3600},
+        "auth_implementation_client_id": "test_client_id",
+        "client_secret": "test_secret",
+    }
+    coordinator = EtsyUpdateCoordinator(hass, mock_entry)
+
+    calls = 0
+
+    async def flaky():
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise EtsyRateLimitError("Rate limit exceeded (429)", 30)
+        return {"ok": True}
+
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    with patch(
+        "custom_components.etsyapp.coordinator.asyncio.sleep",
+        side_effect=fake_sleep,
+    ):
+        result = await coordinator._fetch_with_retry(flaky)
+
+    assert result == {"ok": True}
+    assert len(sleeps) == 2
+    assert all(delay >= 30 for delay in sleeps)
+
+
+@pytest.mark.asyncio
+async def test_direct_long_retry_after_defers_to_next_refresh(hass):
+    """A Retry-After beyond the in-cycle wait budget gives up the cycle
+    instead of holding the coordinator open for minutes."""
+    mock_entry = Mock()
+    mock_entry.options = {}
+    mock_entry.data = {
+        "shop_id": "56636211",
+        "token": {"access_token": "t", "expires_at": time.time() + 3600},
+        "auth_implementation_client_id": "test_client_id",
+        "client_secret": "test_secret",
+    }
+    coordinator = EtsyUpdateCoordinator(hass, mock_entry)
+
+    async def always_limited():
+        raise EtsyRateLimitError("Rate limit exceeded (429)", 300)
+
+    sleeps = []
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    with patch(
+        "custom_components.etsyapp.coordinator.asyncio.sleep",
+        side_effect=fake_sleep,
+    ):
+        with pytest.raises(UpdateFailed):
+            await coordinator._fetch_with_retry(always_limited)
+
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_update_interval_option(hass):
+    """The options-flow update interval is applied, and values below the
+    floor are clamped up to protect the shared proxy quota."""
+    coordinator = EtsyUpdateCoordinator(
+        hass, _make_proxy_entry(options={"update_interval": 900})
+    )
+    assert coordinator.update_interval.total_seconds() == 900
+
+    default = EtsyUpdateCoordinator(hass, _make_proxy_entry())
+    assert default.update_interval.total_seconds() == 300
+
+    clamped = EtsyUpdateCoordinator(
+        hass, _make_proxy_entry(options={"update_interval": 60})
+    )
+    assert clamped.update_interval.total_seconds() == 300

@@ -21,6 +21,10 @@ from .const import (
     CONF_PROXY_URL,
     CONF_PROXY_API_KEY,
     CONF_HMAC_SECRET,
+    CONF_UPDATE_INTERVAL,
+    UPDATE_INTERVAL_SECONDS,
+    MIN_UPDATE_INTERVAL_SECONDS,
+    MAX_UPDATE_INTERVAL_SECONDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -673,5 +677,17 @@ class EtsyOptionsFlow(config_entries.OptionsFlow):
                     "stock_threshold",
                     default=current_options.get("stock_threshold", 5),
                 ): vol.All(vol.Coerce(int), vol.Range(min=0, max=20)),
+                vol.Optional(
+                    CONF_UPDATE_INTERVAL,
+                    default=current_options.get(
+                        CONF_UPDATE_INTERVAL, UPDATE_INTERVAL_SECONDS
+                    ),
+                ): vol.All(
+                    vol.Coerce(int),
+                    vol.Range(
+                        min=MIN_UPDATE_INTERVAL_SECONDS,
+                        max=MAX_UPDATE_INTERVAL_SECONDS,
+                    ),
+                ),
             }),
         )

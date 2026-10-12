@@ -3,6 +3,10 @@
 DOMAIN = "etsyapp"
 ETSY_API_BASE = "https://openapi.etsy.com/v3/application"
 UPDATE_INTERVAL_SECONDS = 300  # RATE LIMIT VARIES BY ENDPOINT
+# User-configurable refresh cadence (options flow). The floor protects the
+# shared proxy quota; the ceiling is one refresh per day.
+MIN_UPDATE_INTERVAL_SECONDS = 300
+MAX_UPDATE_INTERVAL_SECONDS = 86400
 API_FETCH_LIMIT = 10  # Limit for listings and transactions fetched from API
 # Pending-orders (unshipped) fetch: lookback window and page size.
 PENDING_LOOKBACK_DAYS = 365
@@ -15,6 +19,7 @@ CONNECTION_MODE_PROXY = "proxy"
 # Configuration keys
 CONF_CONNECTION_MODE = "connection_mode"
 CONF_PROXY_URL = "proxy_url"
+CONF_UPDATE_INTERVAL = "update_interval"
 CONF_PROXY_API_KEY = "proxy_api_key"
 CONF_HMAC_SECRET = "hmac_secret"
 ETSY_ORDER_STATUSES = {

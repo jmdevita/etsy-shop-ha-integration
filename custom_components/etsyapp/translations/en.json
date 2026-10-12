@@ -103,12 +103,14 @@
                 "data": {
                     "listings_display_limit": "Number of listings to display",
                     "transactions_display_limit": "Number of recent orders to display",
-                    "stock_threshold": "Low stock alert threshold"
+                    "stock_threshold": "Low stock alert threshold",
+                    "update_interval": "Update interval (seconds)"
                 },
                 "data_description": {
                     "listings_display_limit": "How many listings to show in sensor attributes (1-25)",
                     "transactions_display_limit": "How many recent orders to show in sensor attributes (1-25)",
-                    "stock_threshold": "Alert when a listing's stock drops to this number or below (0-20). Set to 0 to alert only when a listing sells out. To turn alerts off, disable your low-stock automation."
+                    "stock_threshold": "Alert when a listing's stock drops to this number or below (0-20). Set to 0 to alert only when a listing sells out. To turn alerts off, disable your low-stock automation.",
+                    "update_interval": "How often to refresh shop data, in seconds (300-86400). A higher value reduces API usage — helpful in proxy mode, where the Etsy quota is shared with other users of the integration."
                 }
             }
         }
