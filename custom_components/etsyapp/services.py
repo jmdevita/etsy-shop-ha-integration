@@ -39,7 +39,7 @@ async def async_register_services(hass: HomeAssistant):
         _LOGGER.info("Manually refreshing Etsy shop data")
 
         # Find all Etsy coordinators and refresh them
-        for entry_id, entry_data in hass.data.get(DOMAIN, {}).items():
+        for entry_id, entry_data in list(hass.data.get(DOMAIN, {}).items()):
             if "coordinator" in entry_data:
                 coordinator = entry_data["coordinator"]
                 await coordinator.async_request_refresh()
@@ -53,7 +53,7 @@ async def async_register_services(hass: HomeAssistant):
         _LOGGER.info("Getting shop stats: listings=%s, transactions=%s", include_listings, include_transactions)
 
         # Get the first coordinator's data
-        for entry_id, entry_data in hass.data.get(DOMAIN, {}).items():
+        for entry_id, entry_data in list(hass.data.get(DOMAIN, {}).items()):
             if "coordinator" in entry_data:
                 coordinator = entry_data["coordinator"]
                 await coordinator.async_request_refresh()
@@ -88,7 +88,7 @@ async def async_register_services(hass: HomeAssistant):
         event_type = call.data["event_type"]
 
         # Find coordinator and device for event data
-        for entry_id, entry_data in hass.data.get(DOMAIN, {}).items():
+        for entry_id, entry_data in list(hass.data.get(DOMAIN, {}).items()):
             if "coordinator" not in entry_data:
                 continue
 

@@ -104,6 +104,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: EtsyConfigEntry) -> bool
         hass.data[DOMAIN][entry.entry_id]["platforms"] = PLATFORMS
 
     entry.runtime_data = coordinator
+    # Remember the options this entry was loaded with so the update listener can
+    # tell a real options change from a data-only update (OAuth token refresh).
+    coordinator.loaded_options = dict(entry.options)
     entry.async_on_unload(entry.add_update_listener(async_update_entry))
     await cleanup_old_device(hass)
 
@@ -132,6 +135,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: EtsyConfigEntry) -> boo
 
 async def async_update_entry(hass: HomeAssistant, config_entry: EtsyConfigEntry):
     """Reload Etsy Shop component when options changed."""
+    # Update listeners also fire on data-only updates, e.g. every OAuth token
+    # refresh. Reloading then drops all entities and mutates hass.data[DOMAIN]
+    # while services iterate it, so skip the reload unless options changed.
+    coordinator = getattr(config_entry, "runtime_data", None)
+    if coordinator is not None and dict(config_entry.options) == getattr(
+        coordinator, "loaded_options", None
+    ):
+        return
     await hass.config_entries.async_reload(config_entry.entry_id)
 
 
