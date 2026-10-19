@@ -3,6 +3,27 @@
 from datetime import datetime
 from typing import Any
 
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+
+from .const import DOMAIN
+
+
+def async_get_entry_device(
+    hass: HomeAssistant, entry_id: str
+) -> dr.DeviceEntry | None:
+    """Return the shop device belonging to a config entry.
+
+    Device identifiers are no longer unique across config entries, so
+    `async_get_device(identifiers=...)` is deprecated. Scoping the lookup to
+    the entry's own devices works on old and new HA versions alike.
+    """
+    identifier = (DOMAIN, entry_id)
+    for device in dr.async_entries_for_config_entry(dr.async_get(hass), entry_id):
+        if identifier in device.identifiers:
+            return device
+    return None
+
 
 def format_money(money_obj: dict | None) -> dict | None:
     """Convert an Etsy money object to a flat {amount, currency_code} dict.

@@ -6,10 +6,10 @@ from datetime import datetime
 import voluptuous as vol
 
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from homeassistant.helpers import config_validation as cv, device_registry as dr
+from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
-from .utils import build_transaction_detail
+from .utils import async_get_entry_device, build_transaction_detail
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -95,10 +95,7 @@ async def async_register_services(hass: HomeAssistant):
             coordinator = entry_data["coordinator"]
             config_entry = coordinator.config_entry
 
-            device_registry = dr.async_get(hass)
-            device = device_registry.async_get_device(
-                identifiers={(DOMAIN, config_entry.entry_id)}
-            )
+            device = async_get_entry_device(hass, config_entry.entry_id)
             device_id = device.id if device else None
 
             data = coordinator.data or {}

@@ -495,9 +495,9 @@ async def test_new_order_event_payload_shape(hass):
     }
 
     with patch(
-        "homeassistant.helpers.device_registry.async_get"
-    ) as mock_dr_get:
-        mock_dr_get.return_value.async_get_device.return_value = fake_device
+        "custom_components.etsyapp.coordinator.async_get_entry_device",
+        return_value=fake_device,
+    ):
         await coordinator._check_for_changes(data)
     await hass.async_block_till_done()
 
@@ -546,8 +546,10 @@ def _low_stock_data(listings, transactions=None):
 async def _run_check(hass, coordinator, data):
     fake_device = Mock()
     fake_device.id = "test_device_id"
-    with patch("homeassistant.helpers.device_registry.async_get") as mock_dr_get:
-        mock_dr_get.return_value.async_get_device.return_value = fake_device
+    with patch(
+        "custom_components.etsyapp.coordinator.async_get_entry_device",
+        return_value=fake_device,
+    ):
         await coordinator._check_for_changes(data)
     await hass.async_block_till_done()
 

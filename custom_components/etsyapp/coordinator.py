@@ -31,7 +31,11 @@ from .const import (
     CONF_HMAC_SECRET,
 )
 from .hmac_client import HMACClient
-from .utils import build_receipt_summary, build_transaction_detail
+from .utils import (
+    async_get_entry_device,
+    build_receipt_summary,
+    build_transaction_detail,
+)
 
 _LOGGER = logging.getLogger(__name__)
 type EtsyConfigEntry = ConfigEntry[EtsyUpdateCoordinator]
@@ -822,12 +826,7 @@ class EtsyUpdateCoordinator(DataUpdateCoordinator):
     async def _check_for_changes(self, data: dict[str, Any]) -> None:
         """Check for changes in data and fire device trigger events."""
         # Get device ID for this integration
-        from homeassistant.helpers import device_registry as dr
-
-        device_registry = dr.async_get(self._hass)
-        device = device_registry.async_get_device(
-            identifiers={(DOMAIN, self.config_entry.entry_id)}
-        )
+        device = async_get_entry_device(self._hass, self.config_entry.entry_id)
 
         if not device:
             return
