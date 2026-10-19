@@ -105,7 +105,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: EtsyConfigEntry) -> bool
 
     entry.runtime_data = coordinator
     entry.async_on_unload(entry.add_update_listener(async_update_entry))
-    await cleanup_old_device(hass)
+    await cleanup_old_device(hass, entry.entry_id)
 
     return True
 
@@ -135,10 +135,10 @@ async def async_update_entry(hass: HomeAssistant, config_entry: EtsyConfigEntry)
     await hass.config_entries.async_reload(config_entry.entry_id)
 
 
-async def cleanup_old_device(hass: HomeAssistant) -> None:
+async def cleanup_old_device(hass: HomeAssistant, entry_id: str) -> None:
     """Cleanup device without proper device identifier."""
     device_reg = dr.async_get(hass)
-    device = device_reg.async_get_device(identifiers={(DOMAIN,)})
-    if device:
-        _LOGGER.debug("Removing improper device %s", device.name)
-        device_reg.async_remove_device(device.id)
+    for device in dr.async_entries_for_config_entry(device_reg, entry_id):
+        if (DOMAIN,) in device.identifiers:
+            _LOGGER.debug("Removing improper device %s", device.name)
+            device_reg.async_remove_device(device.id)
